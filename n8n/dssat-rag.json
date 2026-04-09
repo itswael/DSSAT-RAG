@@ -1,0 +1,323 @@
+{
+  "name": "dssat-rag",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "Hi there! 👋\nHow can I assist you today?",
+        "options": {
+          "allowFileUploads": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -672,
+        224
+      ],
+      "id": "e9640bc7-db9b-4641-9c46-8ed8f4285d01",
+      "name": "When chat message received",
+      "webhookId": "71d23e3d-b4a3-4493-ab3f-1b8a9029b394"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a DSSAT expert. Use the provided tools to find specific yield and irrigation data.\nProvide a concise, easy-to-understand, point-by-point answer. Avoid long paragraphs.\nChat memory can be empty on first run; this is normal. Do not fail or retry because memory is empty.\nUse the retriever tool at most once per question. If retrieval returns no relevant data, stop and clearly ask the user to upload or re-upload DSSAT files.\nDo not loop on missing memory or missing retrieval results.",
+          "maxIterations": 2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        560,
+        -144
+      ],
+      "id": "cfa3befc-35dc-479e-afc5-4ce8f723bdf3",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId || $json.chatId || 'default-chat-session' }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        576,
+        176
+      ],
+      "id": "3b6d18f8-5bd6-42a5-ba4e-1261cabfae10",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "memoryKey": {
+          "__rl": true,
+          "mode": "list",
+          "value": "={{ 'vector_store_' + ($json.sessionId || $json.chatId || 'default-chat-session') }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        -176,
+        -272
+      ],
+      "id": "c38d1a11-d5d0-4b3a-bd8c-64e958534ff9",
+      "name": "Simple Vector Store"
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "loader": "textLoader",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        48,
+        -112
+      ],
+      "id": "d6ca5e5b-f207-45b1-b0d2-af0d96f4c4c5",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aab9b788-f2ee-4149-a6d0-4ba26fc51692",
+              "leftValue": "={{ $json.files?.[0] ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -432,
+        224
+      ],
+      "id": "4e9a9bfd-ca77-4c33-9b78-6dca59e65a55",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Use this tool to look up DSSAT simulation results, including crop yield (kg/ha), anthesis dates, and maturity dates from the uploaded files.",
+        "memoryKey": {
+          "__rl": true,
+          "mode": "list",
+          "value": "={{ 'vector_store_' + ($json.sessionId || $json.chatId || 'default-chat-session') }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        736,
+        112
+      ],
+      "id": "ae0b446a-ceb1-466f-b895-d68161591a2c",
+      "name": "Simple Vector Store1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        736,
+        304
+      ],
+      "id": "56e5746c-1e0f-4f4f-b886-f8f41c1bbcfe",
+      "name": "Embeddings Google Gemini1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Qx1RnEWGBtFuuH6n",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        -64
+      ],
+      "id": "5bf9f34d-db27-41aa-938b-554cb6c51fc9",
+      "name": "Embeddings Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Qx1RnEWGBtFuuH6n",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-oss-120b",
+          "mode": "list",
+          "cachedResultName": "gpt-oss-120b"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        368,
+        192
+      ],
+      "id": "3a29df31-aab3-45ec-8f31-9c124eadc55f",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "Q0GaCPW5Unr4tM65",
+          "name": "OpenAi account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Vector Store": {
+      "ai_tool": [
+        []
+      ],
+      "main": [
+        []
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Vector Store1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Simple Vector Store1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "dfb71a92-b9fd-454a-ab74-8f971c6bd965",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "62b8acca567381006c0d2babd683a692236c5844f8a5213dfbde085a4713b53c"
+  },
+  "id": "daf6x7QwOhRZFxpe",
+  "tags": []
+}
