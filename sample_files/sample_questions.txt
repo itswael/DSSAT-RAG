@@ -1,0 +1,9 @@
+What is my expected maize yield if I don't irrigate and use low nitrogen? (Answer: ~2,293 kg/ha) .
+When should I expect my maize to reach maturity? (Answer: 128 days after planting for all treatments in this file) .
+Why was my yield lower in the rainfed experiment? (Answer: Significant water stress was recorded during the 'End Leaf Growth to Beginning Grain Fill' phase, reaching a stress factor of 0.759-0.805) .
+How much grain yield am I getting per millimeter of rain?" (Answer: 3.5 kg/ha per mm of rain for rainfed treatments) .
+How much nitrogen did the crop actually take up in the irrigated trial? (Answer: 137 kg N/ha for the low nitrogen irrigated run) .
+give major differences among all 4 runs?
+under what conditions, will i get max yield?
+what if i increase Nitrogen to 150?
+if nitrogen value remains same, what is the effect of irrigation on yield?
