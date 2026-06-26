@@ -192,7 +192,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
-                    table: ({ node, ...props }) => (
+                    table: (_node, ...props) => (
                       <table
                         {...props}
                         style={{
