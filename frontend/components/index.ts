@@ -2,8 +2,11 @@
  * Component Exports
  */
 
-export { ChatContainer } from './ChatContainer'
-export { ChatMessage } from './ChatMessage'
-export { ChatInput } from './ChatInput'
+import { ChatContainer } from './ChatContainer'
+import { ChatMessage } from './ChatMessage'
+import { ChatInput } from './ChatInput'
 
-export default {}
+export { ChatContainer, ChatMessage, ChatInput }
+
+const components = { ChatContainer, ChatMessage, ChatInput }
+export default components
