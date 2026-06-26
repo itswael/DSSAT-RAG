@@ -10,3 +10,30 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
     restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:2.8.3
+    container_name: n8n-main
+    environment:
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_MODE=external
+      - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
+      - N8N_RUNNERS_AUTH_TOKEN=replace-with-your-api-key
+      - N8N_NATIVE_PYTHON_RUNNER=true
+      - N8N_RUNNERS_BUILTINS_DENY=""
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  task-runners:
+    image: n8nio/runners:2.8.3
+    container_name: n8n-runners
+    environment:
+      - N8N_RUNNERS_TASK_BROKER_URI=http://n8n-main:5679
+      - N8N_RUNNERS_AUTH_TOKEN=replace-with-your-api-key
+      - N8N_RUNNERS_BUILTINS_DENY=""
+    depends_on:
+      - n8n
+volumes:
+  n8n_data:
