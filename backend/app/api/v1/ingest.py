@@ -5,19 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models.simulation import Simulation
-from app.repositories.simulation import SimulationRepository
-from app.schemas.simulation import (
-    SimulationCreate,
-    SimulationResponse,
-)
-from app.services.simulation import SimulationService
-from app.parsers.csv_parser import CSVParser, parse_summary_csv
+from app.services.ingestion import IngestionService, IngestionResult
+from app.parsers.csv_parser import DSSATParser, CanonicalSimulationModel
 
 router = APIRouter()
 
 
-@router.post("/", response_model=SimulationResponse)
+@router.post("/")
 async def ingest_simulation(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -30,7 +24,7 @@ async def ingest_simulation(
         db: Database session
 
     Returns:
-        Ingestion result with simulation ID
+        Ingestion result with statistics
     """
     # Parse the CSV file
     try:
@@ -50,7 +44,9 @@ async def ingest_simulation(
             temp_path = tmp_file.name
 
         try:
-            data = parse_summary_csv(temp_path)
+            # Parse CSV using DSSATParser
+            canonical_list: List[CanonicalSimulationModel] = DSSATParser.parse_csv(temp_path)
+
         finally:
             os.unlink(temp_path)
 
@@ -60,47 +56,37 @@ async def ingest_simulation(
             detail=f"Failed to parse CSV file: {str(e)}",
         )
 
-    if not data:
-        raise HTTPException(
-            status_code=400,
-            detail="No data found in CSV file",
-        )
+    if not canonical_list:
+        return {
+            "records_processed": 0,
+            "records_failed": 0,
+            "execution_time_ms": 0.0,
+            "simulation_ids": [],
+            "errors": ["No valid data found in CSV file"],
+        }
 
-    # Extract simulation metadata from first row
-    # Note: This is a simplified example - adjust based on actual CSV structure
-    first_row = data[0]
+    # Create ingestion service and process
+    service = IngestionService(db)
 
     try:
-        simulation_in = SimulationCreate(
-            experiment_name=first_row.get("EXPNAME", "Unknown"),
-            run_name=first_row.get("RUNNAME", "Unknown"),
-            country=first_row.get("COUNTRY", ""),
-            state=first_row.get("STATE", ""),
-            district=first_row.get("DISTRICT", ""),
-            ecological_zone=first_row.get("ECOZONE", ""),
-            latitude=float(first_row.get("LATITUDE", 0)),
-            longitude=float(first_row.get("LONGITUDE", 0)),
-            crop=first_row.get("CROP", ""),
-            simulation_year=int(first_row.get("YEAR", 2024)),
-        )
+        result: IngestionResult = await service.ingest_canonical_models(canonical_list)
 
-    except (ValueError, KeyError) as e:
+        return {
+            "records_processed": result.records_processed,
+            "records_failed": result.records_failed,
+            "execution_time_ms": round(result.execution_time_ms, 2),
+            "simulation_ids": result.simulation_ids,
+            "errors": result.errors,
+        }
+
+    except Exception as e:
         raise HTTPException(
-            status_code=400,
-            detail=f"Invalid CSV data: {str(e)}",
+            status_code=500,
+            detail=f"Failed to ingest data: {str(e)}",
         )
 
-    # Create service and save simulation
-    service = SimulationService(db)
-    simulation = await service.create_simulation(simulation_in)
 
-    return {
-        "message": "Simulation ingested successfully",
-        "simulation_id": str(simulation.simulation_id),
-    }
-
-
-@router.post("/batch", response_model=List[SimulationResponse])
+@router.post("/batch")
 async def ingest_simulations_batch(
     files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
@@ -113,10 +99,10 @@ async def ingest_simulations_batch(
         db: Database session
 
     Returns:
-        Ingestion result with simulation IDs
+        Ingestion result with statistics for each file
     """
     results = []
-    service = SimulationService(db)
+    service = IngestionService(db)
 
     for file in files:
         try:
@@ -135,35 +121,34 @@ async def ingest_simulations_batch(
                 temp_path = tmp_file.name
 
             try:
-                data = parse_summary_csv(temp_path)
+                canonical_list: List[CanonicalSimulationModel] = DSSATParser.parse_csv(temp_path)
+
             finally:
                 os.unlink(temp_path)
 
-            if not data:
+            if not canonical_list:
+                results.append(
+                    {
+                        "file": file.filename,
+                        "records_processed": 0,
+                        "records_failed": 0,
+                        "execution_time_ms": 0.0,
+                        "simulation_ids": [],
+                        "errors": ["No valid data found in CSV file"],
+                    }
+                )
                 continue
 
-            first_row = data[0]
-
-            simulation_in = SimulationCreate(
-                experiment_name=first_row.get("EXPNAME", "Unknown"),
-                run_name=first_row.get("RUNNAME", "Unknown"),
-                country=first_row.get("COUNTRY", ""),
-                state=first_row.get("STATE", ""),
-                district=first_row.get("DISTRICT", ""),
-                ecological_zone=first_row.get("ECOZONE", ""),
-                latitude=float(first_row.get("LATITUDE", 0)),
-                longitude=float(first_row.get("LONGITUDE", 0)),
-                crop=first_row.get("CROP", ""),
-                simulation_year=int(first_row.get("YEAR", 2024)),
-            )
-
-            simulation = await service.create_simulation(simulation_in)
+            result: IngestionResult = await service.ingest_canonical_models(canonical_list)
 
             results.append(
                 {
                     "file": file.filename,
-                    "simulation_id": str(simulation.simulation_id),
-                    "status": "success",
+                    "records_processed": result.records_processed,
+                    "records_failed": result.records_failed,
+                    "execution_time_ms": round(result.execution_time_ms, 2),
+                    "simulation_ids": result.simulation_ids,
+                    "errors": result.errors,
                 }
             )
 
@@ -171,8 +156,11 @@ async def ingest_simulations_batch(
             results.append(
                 {
                     "file": file.filename,
+                    "records_processed": 0,
+                    "records_failed": 0,
+                    "execution_time_ms": 0.0,
+                    "simulation_ids": [],
                     "error": str(e),
-                    "status": "failed",
                 }
             )
 
