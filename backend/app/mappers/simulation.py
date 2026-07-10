@@ -1,62 +1,129 @@
 """Mappers for simulation data."""
 from typing import List
 
+from geoalchemy2 import WKTElement
+from sqlalchemy import func
+
 from app.models.simulation import Simulation, SimulationOutput
-from app.schemas.simulation import (
-    SimulationCreate,
-    SimulationOutputCreate,
-)
+from app.parsers.csv_parser import CanonicalSimulationModel
 
 
-def map_simulation_create_to_model(
-    schema: SimulationCreate,
+def map_canonical_to_simulation(
+    canonical: CanonicalSimulationModel,
 ) -> Simulation:
     """
-    Map SimulationCreate schema to Simulation model.
+    Map CanonicalSimulationModel to Simulation ORM model.
 
     Args:
-        schema: Input schema
+        canonical: Canonical simulation model instance
 
     Returns:
-        Simulation model instance
+        Simulation ORM model instance
     """
-    from geoalchemy2 import Geometry, WKTElement
-
     # Create geometry point from coordinates
-    location_wkt = f"POINT({schema.longitude} {schema.latitude})"
+    location_wkt = f"POINT({canonical.longitude} {canonical.latitude})"
     location_geom = WKTElement(location_wkt, srid=4326)
 
     return Simulation(
-        experiment_name=schema.experiment_name,
-        run_name=schema.run_name,
-        country=schema.country,
-        state=schema.state,
-        district=schema.district,
-        ecological_zone=schema.ecological_zone,
-        latitude=schema.latitude,
-        longitude=schema.longitude,
+        experiment_name=canonical.crop,
+        run_name=canonical.run_name,
+        country="",  # Will be populated from CSV if available
+        state="",
+        district="",
+        ecological_zone="",
+        latitude=canonical.latitude or 0.0,
+        longitude=canonical.longitude or 0.0,
         location=location_geom,
-        geohash=schema.geohash,
-        crop=schema.crop,
-        cultivar=schema.cultivar,
-        irrigation=schema.irrigation,
-        nitrogen_level=schema.nitrogen_level,
-        planting_stage=schema.planting_stage,
-        planting_date=schema.planting_date,
-        harvest_date=schema.harvest_date,
-        simulation_year=schema.simulation_year,
-        harvest_area=schema.harvest_area,
+        geohash=None,  # Can be computed later if needed
+        crop=canonical.crop or "",
+        cultivar=canonical.cultivar or "",
+        irrigation=canonical.irrigation or "",
+        nitrogen_level=canonical.nitrogen_level or "",
+        planting_stage=canonical.planting_stage or "",
+        planting_date=None,
+        harvest_date=None,
+        simulation_year=canonical.year or 2024,
+        harvest_area=canonical.harvest_area,
     )
+
+
+def map_canonical_to_simulations(
+    canonical_list: List[CanonicalSimulationModel],
+) -> List[Simulation]:
+    """
+    Map list of CanonicalSimulationModel to Simulation ORM models.
+
+    Args:
+        canonical_list: List of canonical simulation model instances
+
+    Returns:
+        List of Simulation ORM model instances
+    """
+    return [map_canonical_to_simulation(c) for c in canonical_list]
+
+
+def map_canonical_outputs(
+    canonical: CanonicalSimulationModel,
+    simulation_id: str,
+) -> List[SimulationOutput]:
+    """
+    Map CanonicalSimulationModel outputs to SimulationOutput ORM models.
+
+    Args:
+        canonical: Canonical simulation model instance
+        simulation_id: Simulation ID to link outputs
+
+    Returns:
+        List of SimulationOutput ORM model instances
+    """
+    outputs = []
+
+    if not canonical.outputs:
+        return outputs
+
+    for variable_code, value in canonical.outputs.items():
+        output = SimulationOutput(
+            simulation_id=simulation_id,
+            variable_code=variable_code,
+            value=value,
+            unit=None,  # Can be populated later if needed
+        )
+        outputs.append(output)
+
+    return outputs
+
+
+def map_canonical_outputs_bulk(
+    canonical_list: List[CanonicalSimulationModel],
+    simulation_ids: List[str],
+) -> List[SimulationOutput]:
+    """
+    Map list of CanonicalSimulationModel outputs to SimulationOutput ORM models.
+
+    Args:
+        canonical_list: List of canonical simulation model instances
+        simulation_ids: List of simulation IDs (same order as canonical_list)
+
+    Returns:
+        List of SimulationOutput ORM model instances
+    """
+    outputs = []
+
+    for canonical, sim_id in zip(canonical_list, simulation_ids):
+        output_list = map_canonical_outputs(canonical, sim_id)
+        outputs.extend(output_list)
+
+    return outputs
 
 
 def map_simulation_to_response(
     model: Simulation,
 ) -> dict:
     """
-    Map Simulation model to response dictionary.
+    Map Simulation ORM to response dictionary.
 
     Args:
-        model: Simulation model instance
+        model: Simulation ORM instance
 
     Returns:
         Response dictionary
@@ -84,49 +151,6 @@ def map_simulation_to_response(
         "harvest_date": str(model.harvest_date) if model.harvest_date else None,
         "simulation_year": model.simulation_year,
         "harvest_area": model.harvest_area,
-        "created_at": str(model.created_at),
-        "updated_at": str(model.updated_at),
-    }
-
-
-def map_output_create_to_model(
-    schema: SimulationOutputCreate,
-    simulation_id: str,
-) -> SimulationOutput:
-    """
-    Map SimulationOutputCreate schema to SimulationOutput model.
-
-    Args:
-        schema: Input schema
-        simulation_id: Simulation ID
-
-    Returns:
-        SimulationOutput model instance
-    """
-    return SimulationOutput(
-        simulation_id=simulation_id,
-        variable_code=schema.variable_code,
-        value=schema.value,
-        unit=schema.unit,
-    )
-
-
-def map_output_to_response(model: SimulationOutput) -> dict:
-    """
-    Map SimulationOutput model to response dictionary.
-
-    Args:
-        model: SimulationOutput model instance
-
-    Returns:
-        Response dictionary
-    """
-    return {
-        "id": model.id,
-        "simulation_id": str(model.simulation_id),
-        "variable_code": model.variable_code,
-        "value": model.value,
-        "unit": model.unit,
         "created_at": str(model.created_at),
         "updated_at": str(model.updated_at),
     }
