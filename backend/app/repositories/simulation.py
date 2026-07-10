@@ -227,6 +227,22 @@ class SimulationRepository(BaseRepository[Simulation]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def create_bulk(self, objs: List[Simulation]) -> List[Simulation]:
+        """
+        Create multiple simulations in bulk.
+
+        Args:
+            objs: List of Simulation ORM instances
+
+        Returns:
+            List of created simulation records with IDs populated
+        """
+        self.db.add_all(objs)
+        await self.db.commit()
+        for obj in objs:
+            await self.db.refresh(obj)
+        return objs
+
 
 class SimulationOutputRepository(BaseRepository[SimulationOutput]):
     """Repository for simulation output operations."""
@@ -319,3 +335,19 @@ class SimulationOutputRepository(BaseRepository[SimulationOutput]):
 
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def create_bulk(self, objs: List[SimulationOutput]) -> List[SimulationOutput]:
+        """
+        Create multiple outputs in bulk.
+
+        Args:
+            objs: List of SimulationOutput ORM instances
+
+        Returns:
+            List of created output records with IDs populated
+        """
+        self.db.add_all(objs)
+        await self.db.commit()
+        for obj in objs:
+            await self.db.refresh(obj)
+        return objs
