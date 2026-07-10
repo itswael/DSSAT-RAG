@@ -9,14 +9,14 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
       "position": [
-        -1520,
-        192
+        528,
+        240
       ],
-      "id": "b104ae7b-75e4-46d0-8e60-a15bd029cb80",
+      "id": "a51a80e6-b60c-47d3-8db5-c00d5d097473",
       "name": "Embeddings OpenAI1",
       "credentials": {
         "openAiApi": {
-          "id": "Q0GaCPW5Unr4tM65",
+          "id": "9H36tjyCTIQ8Krct",
           "name": "OpenAi account"
         }
       }
@@ -24,17 +24,17 @@
     {
       "parameters": {
         "dataType": "binary",
-        "loader": "textLoader",
+        "loader": "csvLoader",
         "textSplittingMode": "custom",
         "options": {}
       },
       "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
       "typeVersion": 1.1,
       "position": [
-        -1344,
-        64
+        704,
+        112
       ],
-      "id": "3b090d38-d8bc-461e-a142-a6ac3535a5b2",
+      "id": "ef76dda1-87d1-445d-bccd-816e9182223f",
       "name": "Default Data Loader2"
     },
     {
@@ -42,10 +42,10 @@
       "type": "n8n-nodes-base.limit",
       "typeVersion": 1,
       "position": [
-        -1072,
-        -208
+        976,
+        -160
       ],
-      "id": "93266923-b2f6-44bf-9bb1-42905ea68ae3",
+      "id": "985f3562-6a0b-4710-896f-eb940768e9ab",
       "name": "Limit"
     },
     {
@@ -65,10 +65,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        -816,
-        -96
+        1232,
+        -48
       ],
-      "id": "5b3255da-6816-4459-b2be-2b1c1c09f433",
+      "id": "aca4dcb4-4742-461c-937f-9b2029cb86b1",
       "name": "Edit Fields"
     },
     {
@@ -79,10 +79,10 @@
       "type": "@n8n/n8n-nodes-langchain.textSplitterCharacterTextSplitter",
       "typeVersion": 1,
       "position": [
-        -1216,
-        208
+        992,
+        272
       ],
-      "id": "0b0d4fad-87e8-42c9-b6dd-52c2a67329f0",
+      "id": "a3534340-e19f-4b7a-81c2-675666d20a9a",
       "name": "Character Text Splitter"
     },
     {
@@ -99,14 +99,14 @@
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1.3,
       "position": [
-        -1600,
-        -128
+        448,
+        -80
       ],
-      "id": "68ac9a25-9d4e-4fc3-ab5d-e82a7d651ed6",
+      "id": "f8c6cfaf-53e6-4479-88e8-d69cc697416a",
       "name": "Qdrant Vector Store1",
       "credentials": {
         "qdrantApi": {
-          "id": "rehWUL9xk26X423Z",
+          "id": "wD4R3gLnLmnVDJH1",
           "name": "QdrantApi account"
         }
       }
@@ -123,7 +123,7 @@
         "triggerOn": "specificFolder",
         "folderToWatch": {
           "__rl": true,
-          "value": "fsjdfahdggfajghajdghkjfkfjhasjfaaaa",
+          "value": "1fRxiU0kxRvqJ-5yWBdEpgfjs2yR_VEXz",
           "mode": "id"
         },
         "event": "fileCreated",
@@ -132,14 +132,57 @@
       "type": "n8n-nodes-base.googleDriveTrigger",
       "typeVersion": 1,
       "position": [
-        -1920,
-        -144
+        64,
+        -208
       ],
-      "id": "23c25c25-be46-4c21-9d03-250d878fa2f4",
+      "id": "cdeffc4f-9210-4121-9ebc-d2fd750b4c4c",
       "name": "Google Drive Trigger",
       "credentials": {
         "googleDriveOAuth2Api": {
-          "id": "QQsFfAIXOtWMS8dA",
+          "id": "dLLzOrN7OyLwxevy",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "public": true,
+        "availableInChat": true,
+        "options": {
+          "allowFileUploads": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        32,
+        48
+      ],
+      "id": "7b0b45e6-874a-4e12-8078-820918bc6829",
+      "name": "When chat message received",
+      "webhookId": "3f5b92f8-d3d8-4e30-9448-1f4dabff6542"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        224,
+        -96
+      ],
+      "id": "2b49d3e5-d271-4dc6-8fa7-da68730e86a6",
+      "name": "Download file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "dLLzOrN7OyLwxevy",
           "name": "Google Drive account"
         }
       }
@@ -180,11 +223,6 @@
         ]
       ]
     },
-    "Edit Fields": {
-      "main": [
-        []
-      ]
-    },
     "Character Text Splitter": {
       "ai_textSplitter": [
         [
@@ -211,6 +249,22 @@
       "main": [
         [
           {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        []
+      ]
+    },
+    "Download file": {
+      "main": [
+        [
+          {
             "node": "Qdrant Vector Store1",
             "type": "main",
             "index": 0
@@ -219,17 +273,17 @@
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "b2a49cfa-596f-4593-9ef2-eedb8bc3547d",
+  "versionId": "50356ae7-559d-4037-a057-cec979e8cbc1",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "62b8acca567381006c0d2babd683a692236c5844f8a5213dfbde085a4713b53c"
+    "instanceId": "5e5ed3fcfae590c08e2b659ffdcf5bb119ecc1ba505f221a34516883b89c3eb5"
   },
-  "id": "daf6x7QwOhRZFxpe",
+  "id": "aCjALR1SVErIxuqG",
   "tags": []
 }
