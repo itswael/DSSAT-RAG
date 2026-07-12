@@ -11,10 +11,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -736,
-        -432
+        0,
+        0
       ],
-      "id": "b7086b85-efde-4f87-9138-1096c4cc3f47",
+      "id": "11603952-e739-4cbe-bb95-d496058175b4",
       "name": "Webhook",
       "webhookId": "c2a3f827-cb5a-4657-9087-b38c81521764"
     },
@@ -26,14 +26,14 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
       "position": [
-        0,
-        208
+        736,
+        640
       ],
-      "id": "ef34ddcb-d0e7-43ba-ba88-6faec5032e7d",
+      "id": "e1bd3ef6-e588-4440-9162-48ab1380bbf7",
       "name": "Embeddings OpenAI1",
       "credentials": {
         "openAiApi": {
-          "id": "Q0GaCPW5Unr4tM65",
+          "id": "9H36tjyCTIQ8Krct",
           "name": "OpenAi account"
         }
       }
@@ -43,17 +43,17 @@
         "promptType": "define",
         "text": "={{ $json.body.userQuery }}",
         "options": {
-          "systemMessage": "You are a DSSAT expert. answer the question, based on the tool, very concisely in upto 2 sentence. do not provide clutter or explanations, just the curated answer.\n\ndo NOT provide answers outside the available data, answer only from the provided data. for some queries you would need to relate different runs to drive insights and key points.\n\nIf the query involves crop that is not available, ask user to run dssat for new crop and provide overview file to process then only you can answer for that.\n\nif the query involves question with varying parameter values, if exact parameter value is not available, try to get answer from available data with nearest available parameter value and in your response, inform user to run dssat if exact parameter value to be used in calculation.\nif the parameter value is present already, then answer as usual.",
+          "systemMessage": "You are a DSSAT expert. answer the question, based on the tool, very concisely in upto 2 sentence. do not provide clutter or explanations, just the curated answer.\n\ndo NOT provide answers outside the available data, answer only from the provided data. for some queries you would need to relate different runs to drive insights and key points.\n\nIf the query involves crop that is not available, ask user to run dssat for new crop and provide overview file to process then only you can answer for that.\n\nif the query involves question with varying parameter values, if exact parameter value is not available, try to get answer from available data with nearest available parameter value and in your response, inform user to run dssat if exact parameter value to be used in calculation.\nif the parameter value is present already, then answer as usual.\n\nCultivar details are present in the run name column has values like, VSHT, LNG, VLNG etc.",
           "maxIterations": 5
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
-        -480,
-        -176
+        256,
+        256
       ],
-      "id": "d9a42455-8daf-4dfc-9c1e-305c1dfb4340",
+      "id": "2328d681-1461-4f95-9855-d30fcdfb7538",
       "name": "AI Agent2"
     },
     {
@@ -70,14 +70,14 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
       "position": [
-        -800,
-        48
+        -64,
+        480
       ],
-      "id": "d3682c09-5257-489f-be51-363b76733400",
+      "id": "c0bcb1ab-b038-4658-863e-2c471e058f4e",
       "name": "OpenAI Chat Model2",
       "credentials": {
         "openAiApi": {
-          "id": "Q0GaCPW5Unr4tM65",
+          "id": "9H36tjyCTIQ8Krct",
           "name": "OpenAi account"
         }
       }
@@ -91,10 +91,10 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        -112,
-        -416
+        624,
+        16
       ],
-      "id": "197220d0-3cbc-46b5-aed8-13a6d0f16e4a",
+      "id": "1c1756f4-8686-4772-86b7-3b0ee594f5b1",
       "name": "Respond to Webhook"
     },
     {
@@ -107,20 +107,20 @@
           "mode": "list",
           "cachedResultName": "dssat-rag"
         },
-        "topK": 6,
+        "topK": 10,
         "options": {}
       },
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1.3,
       "position": [
-        -176,
-        0
+        560,
+        432
       ],
-      "id": "117547d7-daa5-4f32-b953-0ac03a65a1d5",
+      "id": "d314203c-5012-4bf2-ad3a-3256418dea5b",
       "name": "Qdrant Vector Store",
       "credentials": {
         "qdrantApi": {
-          "id": "rehWUL9xk26X423Z",
+          "id": "wD4R3gLnLmnVDJH1",
           "name": "QdrantApi account"
         }
       }
@@ -190,11 +190,11 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "b4c2e612-1c63-4839-9fc6-3cd0bbc070f5",
+  "versionId": "ec2627e6-9df5-4144-bc01-37e86681a7f7",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "62b8acca567381006c0d2babd683a692236c5844f8a5213dfbde085a4713b53c"
+    "instanceId": "5e5ed3fcfae590c08e2b659ffdcf5bb119ecc1ba505f221a34516883b89c3eb5"
   },
-  "id": "sJtChoCAqFKYMlqs",
+  "id": "uVHcGTOQA9Ba7pvw",
   "tags": []
 }
