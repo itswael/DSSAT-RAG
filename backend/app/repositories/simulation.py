@@ -1,16 +1,16 @@
 """Simulation repository."""
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy import func, and_, or_
 
 from app.models.simulation import Simulation, SimulationOutput
-from app.repositories.base import BaseRepository
 
 
-class SimulationRepository(BaseRepository[Simulation]):
+class SimulationRepository:
     """Repository for simulation operations."""
 
     def __init__(self, db: AsyncSession):
@@ -20,7 +20,11 @@ class SimulationRepository(BaseRepository[Simulation]):
         Args:
             db: Database session
         """
-        super().__init__(Simulation, db)
+        self.db = db
+
+    async def get(self, id: UUID) -> Optional[Simulation]:
+        """Get a single record by ID."""
+        return await self.db.get(Simulation, id)
 
     async def get_by_experiment_and_run(
         self,
@@ -162,23 +166,102 @@ class SimulationRepository(BaseRepository[Simulation]):
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
-    async def get_within_bbox(
+    async def get_by_cultivar(
         self,
-        min_lat: float,
-        max_lat: float,
-        min_lon: float,
-        max_lon: float,
+        cultivar: str,
         skip: int = 0,
         limit: int = 100,
     ) -> List[Simulation]:
         """
-        Get simulations within bounding box.
+        Get simulations by cultivar.
 
         Args:
-            min_lat: Minimum latitude
-            max_lat: Maximum latitude
-            min_lon: Minimum longitude
-            max_lon: Maximum longitude
+            cultivar: Cultivar name
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            List of simulation records
+        """
+        stmt = (
+            select(Simulation)
+            .where(Simulation.cultivar == cultivar)
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_by_state(
+        self,
+        state: str,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Simulation]:
+        """
+        Get simulations by state.
+
+        Args:
+            state: State name
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            List of simulation records
+        """
+        stmt = (
+            select(Simulation)
+            .where(Simulation.state == state)
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_by_district(
+        self,
+        district: str,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Simulation]:
+        """
+        Get simulations by district.
+
+        Args:
+            district: District name
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            List of simulation records
+        """
+        stmt = (
+            select(Simulation)
+            .where(Simulation.district == district)
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_within_radius(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_km: float,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Simulation]:
+        """
+        Get simulations within a radius.
+
+        Args:
+            latitude: Center latitude
+            longitude: Center longitude
+            radius_km: Radius in kilometers
             skip: Number of records to skip
             limit: Maximum number of records to return
 
@@ -186,17 +269,54 @@ class SimulationRepository(BaseRepository[Simulation]):
             List of simulation records
         """
         from geoalchemy2 import functions as geo_func
-        from sqlalchemy import and_
+        from sqlalchemy import text
+
+        # Convert km to degrees (approximate)
+        radius_deg = radius_km / 111.0
 
         stmt = (
             select(Simulation)
             .where(
                 and_(
-                    Simulation.latitude >= min_lat,
-                    Simulation.latitude <= max_lat,
-                    Simulation.longitude >= min_lon,
-                    Simulation.longitude <= max_lon,
+                    Simulation.latitude >= latitude - radius_deg,
+                    Simulation.latitude <= latitude + radius_deg,
+                    Simulation.longitude >= longitude - radius_deg,
+                    Simulation.longitude <= longitude + radius_deg,
                 )
+            )
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_within_polygon(
+        self,
+        polygon_wkt: str,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Simulation]:
+        """
+        Get simulations within a polygon.
+
+        Args:
+            polygon_wkt: Polygon in WKT format
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            List of simulation records
+        """
+        from geoalchemy2 import functions as geo_func
+        from geoalchemy2 import WKTElement
+
+        polygon_geom = WKTElement(polygon_wkt, srid=4326)
+
+        stmt = (
+            select(Simulation)
+            .where(
+                geo_func.ST_Within(Simulation.location, polygon_geom)
             )
             .offset(skip)
             .limit(limit)
@@ -227,6 +347,138 @@ class SimulationRepository(BaseRepository[Simulation]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_with_filters(
+        self,
+        crop: Optional[str] = None,
+        cultivar: Optional[str] = None,
+        year: Optional[int] = None,
+        state: Optional[str] = None,
+        district: Optional[str] = None,
+        ecological_zone: Optional[str] = None,
+        country: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Simulation]:
+        """
+        Get simulations with multiple filters.
+
+        Args:
+            crop: Crop type (optional)
+            cultivar: Cultivar name (optional)
+            year: Simulation year (optional)
+            state: State name (optional)
+            district: District name (optional)
+            ecological_zone: Ecological zone (optional)
+            country: Country name (optional)
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            List of simulation records
+        """
+        filters = []
+        if crop is not None:
+            filters.append(Simulation.crop == crop)
+        if cultivar is not None:
+            filters.append(Simulation.cultivar == cultivar)
+        if year is not None:
+            filters.append(Simulation.simulation_year == year)
+        if state is not None:
+            filters.append(Simulation.state == state)
+        if district is not None:
+            filters.append(Simulation.district == district)
+        if ecological_zone is not None:
+            filters.append(Simulation.ecological_zone == ecological_zone)
+        if country is not None:
+            filters.append(Simulation.country == country)
+
+        stmt = (
+            select(Simulation)
+            .where(*filters)
+            .offset(skip)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+    async def get_aggregate(
+        self,
+        variable_code: str,
+        aggregation: str,
+        crop: Optional[str] = None,
+        cultivar: Optional[str] = None,
+        year: Optional[int] = None,
+        state: Optional[str] = None,
+        district: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get aggregated values.
+
+        Args:
+            variable_code: Variable code to aggregate
+            aggregation: Aggregation function (avg, max, min, sum)
+            crop: Crop type (optional filter)
+            cultivar: Cultivar name (optional filter)
+            year: Simulation year (optional filter)
+            state: State name (optional filter)
+            district: District name (optional filter)
+
+        Returns:
+            Dictionary with aggregation result
+        """
+        from sqlalchemy import func as sql_func
+
+        # Build filters for simulation join
+        sim_filters = []
+        if crop is not None:
+            sim_filters.append(Simulation.crop == crop)
+        if cultivar is not None:
+            sim_filters.append(Simulation.cultivar == cultivar)
+        if year is not None:
+            sim_filters.append(Simulation.simulation_year == year)
+        if state is not None:
+            sim_filters.append(Simulation.state == state)
+        if district is not None:
+            sim_filters.append(Simulation.district == district)
+
+        # Build aggregation query
+        agg_func = {
+            "avg": sql_func.avg,
+            "max": sql_func.max,
+            "min": sql_func.min,
+            "sum": sql_func.sum,
+        }.get(aggregation.lower(), sql_func.avg)
+
+        stmt = (
+            select(
+                agg_func(SimulationOutput.value).label("value"),
+                sql_func.count().label("count"),
+            )
+            .join(Simulation, SimulationOutput.simulation_id == Simulation.simulation_id)
+            .where(SimulationOutput.variable_code == variable_code)
+        )
+
+        if sim_filters:
+            stmt = stmt.where(*sim_filters)
+
+        result = await self.db.execute(stmt)
+        row = result.fetchone()
+
+        return {
+            "aggregation": aggregation,
+            "variable_code": variable_code,
+            "value": row.value if row else None,
+            "count": row.count if row else 0,
+        }
+
+    async def create(self, obj: Simulation) -> Simulation:
+        """Create a new simulation."""
+        self.db.add(obj)
+        await self.db.commit()
+        await self.db.refresh(obj)
+        return obj
+
     async def create_bulk(self, objs: List[Simulation]) -> List[Simulation]:
         """
         Create multiple simulations in bulk.
@@ -244,7 +496,7 @@ class SimulationRepository(BaseRepository[Simulation]):
         return objs
 
 
-class SimulationOutputRepository(BaseRepository[SimulationOutput]):
+class SimulationOutputRepository:
     """Repository for simulation output operations."""
 
     def __init__(self, db: AsyncSession):
@@ -254,7 +506,7 @@ class SimulationOutputRepository(BaseRepository[SimulationOutput]):
         Args:
             db: Database session
         """
-        super().__init__(SimulationOutput, db)
+        self.db = db
 
     async def get_by_simulation(
         self,
@@ -335,6 +587,13 @@ class SimulationOutputRepository(BaseRepository[SimulationOutput]):
 
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def create(self, obj: SimulationOutput) -> SimulationOutput:
+        """Create a new output."""
+        self.db.add(obj)
+        await self.db.commit()
+        await self.db.refresh(obj)
+        return obj
 
     async def create_bulk(self, objs: List[SimulationOutput]) -> List[SimulationOutput]:
         """
