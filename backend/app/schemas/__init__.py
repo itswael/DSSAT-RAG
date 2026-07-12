@@ -9,6 +9,13 @@ from app.schemas.simulation import (
     SimulationListResponse,
     HealthCheckResponse,
 )
+from app.schemas.query import (
+    QueryFilters,
+    QueryPlan,
+    QueryResult,
+    ChatResponse,
+    ChatRequest,
+)
 
 __all__ = [
     "SimulationBase",
@@ -19,4 +26,9 @@ __all__ = [
     "SimulationResponse",
     "SimulationListResponse",
     "HealthCheckResponse",
+    "QueryFilters",
+    "QueryPlan",
+    "QueryResult",
+    "ChatResponse",
+    "ChatRequest",
 ]
