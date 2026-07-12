@@ -5,56 +5,56 @@ from geoalchemy2 import WKTElement
 from sqlalchemy import func
 
 from app.models.simulation import Simulation, SimulationOutput
-from app.parsers.csv_parser import CanonicalSimulationModel
+from app.parsers.csv_parser import CanonicalSimulation
 
 
 def map_canonical_to_simulation(
-    canonical: CanonicalSimulationModel,
+    canonical: CanonicalSimulation,
 ) -> Simulation:
     """
-    Map CanonicalSimulationModel to Simulation ORM model.
+    Map CanonicalSimulation to Simulation ORM model.
 
     Args:
-        canonical: Canonical simulation model instance
+        canonical: Canonical simulation instance
 
     Returns:
         Simulation ORM model instance
     """
     # Create geometry point from coordinates
-    location_wkt = f"POINT({canonical.longitude} {canonical.latitude})"
+    location_wkt = f"POINT({canonical.location.longitude or 0} {canonical.location.latitude or 0})"
     location_geom = WKTElement(location_wkt, srid=4326)
 
     return Simulation(
-        experiment_name=canonical.crop,
-        run_name=canonical.run_name,
-        country="",  # Will be populated from CSV if available
-        state="",
-        district="",
-        ecological_zone="",
-        latitude=canonical.latitude or 0.0,
-        longitude=canonical.longitude or 0.0,
+        experiment_name=canonical.simulation.experiment_name,
+        run_name=canonical.simulation.run_name,
+        country=canonical.location.country or "",
+        state=canonical.location.state or "",
+        district=canonical.location.district or "",
+        ecological_zone=canonical.location.ecological_zone or "",
+        latitude=canonical.location.latitude or 0.0,
+        longitude=canonical.location.longitude or 0.0,
         location=location_geom,
         geohash=None,  # Can be computed later if needed
-        crop=canonical.crop or "",
-        cultivar=canonical.cultivar or "",
-        irrigation=canonical.irrigation or "",
-        nitrogen_level=canonical.nitrogen_level or "",
-        planting_stage=canonical.planting_stage or "",
+        crop=canonical.simulation.crop or "",
+        cultivar=canonical.simulation.cultivar or "",
+        irrigation=canonical.simulation.irrigation or "",
+        nitrogen_level=canonical.simulation.nitrogen_level or "",
+        planting_stage=canonical.simulation.planting_stage or "",
         planting_date=None,
         harvest_date=None,
-        simulation_year=canonical.year or 2024,
-        harvest_area=canonical.harvest_area,
+        simulation_year=canonical.simulation.year or 2024,
+        harvest_area=canonical.simulation.harvest_area,
     )
 
 
 def map_canonical_to_simulations(
-    canonical_list: List[CanonicalSimulationModel],
+    canonical_list: List[CanonicalSimulation],
 ) -> List[Simulation]:
     """
-    Map list of CanonicalSimulationModel to Simulation ORM models.
+    Map list of CanonicalSimulation to Simulation ORM models.
 
     Args:
-        canonical_list: List of canonical simulation model instances
+        canonical_list: List of canonical simulation instances
 
     Returns:
         List of Simulation ORM model instances
@@ -63,14 +63,14 @@ def map_canonical_to_simulations(
 
 
 def map_canonical_outputs(
-    canonical: CanonicalSimulationModel,
+    canonical: CanonicalSimulation,
     simulation_id: str,
 ) -> List[SimulationOutput]:
     """
-    Map CanonicalSimulationModel outputs to SimulationOutput ORM models.
+    Map CanonicalSimulation outputs to SimulationOutput ORM models.
 
     Args:
-        canonical: Canonical simulation model instance
+        canonical: Canonical simulation instance
         simulation_id: Simulation ID to link outputs
 
     Returns:
@@ -94,14 +94,14 @@ def map_canonical_outputs(
 
 
 def map_canonical_outputs_bulk(
-    canonical_list: List[CanonicalSimulationModel],
+    canonical_list: List[CanonicalSimulation],
     simulation_ids: List[str],
 ) -> List[SimulationOutput]:
     """
-    Map list of CanonicalSimulationModel outputs to SimulationOutput ORM models.
+    Map list of CanonicalSimulation outputs to SimulationOutput ORM models.
 
     Args:
-        canonical_list: List of canonical simulation model instances
+        canonical_list: List of canonical simulation instances
         simulation_ids: List of simulation IDs (same order as canonical_list)
 
     Returns:
