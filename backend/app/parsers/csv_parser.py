@@ -2,71 +2,7 @@
 import pandas as pd
 from typing import List, Dict, Any, Optional
 
-
-class CanonicalSimulationModel:
-    """Canonical simulation model structure."""
-
-    def __init__(
-        self,
-        run_name: str = "",
-        crop: str = "",
-        cultivar: str = "",
-        irrigation: str = "",
-        nitrogen_level: str = "",
-        planting_stage: str = "",
-        harvest_area: Optional[float] = None,
-        year: int = 2024,
-        latitude: Optional[float] = None,
-        longitude: Optional[float] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Initialize canonical simulation model.
-
-        Args:
-            run_name: Simulation run name
-            crop: Crop type code
-            cultivar: Cultivar name (user-defined)
-            irrigation: Irrigation method
-            nitrogen_level: Nitrogen application level
-            planting_stage: Planting stage description
-            harvest_area: Harvested area in hectares
-            year: Simulation year
-            latitude: Latitude coordinate
-            longitude: Longitude coordinate
-            outputs: Dictionary of output variables
-        """
-        self.run_name = run_name or ""
-        self.crop = crop or ""
-        self.cultivar = cultivar or ""
-        self.irrigation = irrigation or ""
-        self.nitrogen_level = nitrogen_level or ""
-        self.planting_stage = planting_stage or ""
-        self.harvest_area = harvest_area
-        self.year = year
-        self.latitude = latitude
-        self.longitude = longitude
-        self.outputs = outputs or {}
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert model to dictionary."""
-        return {
-            "simulation": {
-                "run_name": self.run_name,
-                "crop": self.crop,
-                "cultivar": self.cultivar,
-                "irrigation": self.irrigation,
-                "nitrogen_level": self.nitrogen_level,
-                "planting_stage": self.planting_stage,
-                "harvest_area": self.harvest_area,
-                "year": self.year,
-            },
-            "location": {
-                "latitude": self.latitude,
-                "longitude": self.longitude,
-            },
-            "outputs": self.outputs,
-        }
+from app.models.canonical import CanonicalSimulation
 
 
 class DSSATParser:
@@ -193,7 +129,7 @@ class DSSATParser:
         return value
 
     @classmethod
-    def parse_csv(cls, file_path: str) -> List[CanonicalSimulationModel]:
+    def parse_csv(cls, file_path: str) -> List[CanonicalSimulation]:
         """
         Parse a DSSAT summary CSV file.
 
@@ -201,12 +137,12 @@ class DSSATParser:
             file_path: Path to the CSV file
 
         Returns:
-            List of CanonicalSimulationModel instances
+            List of CanonicalSimulation instances
         """
         # Read CSV with pandas
         df = pd.read_csv(file_path)
 
-        results: List[CanonicalSimulationModel] = []
+        results: List[CanonicalSimulation] = []
 
         for _, row in df.iterrows():
             model = cls._parse_row(row)
@@ -216,7 +152,7 @@ class DSSATParser:
         return results
 
     @classmethod
-    def _parse_row(cls, row: pd.Series) -> Optional[CanonicalSimulationModel]:
+    def _parse_row(cls, row: pd.Series) -> Optional[CanonicalSimulation]:
         """
         Parse a single CSV row.
 
@@ -224,7 +160,7 @@ class DSSATParser:
             row: Pandas Series representing a row
 
         Returns:
-            CanonicalSimulationModel or None if invalid
+            CanonicalSimulation or None if invalid
         """
         # Extract location
         latitude = cls.clean_value(row.get("LATITUDE"))
@@ -255,22 +191,31 @@ class DSSATParser:
             if value is not None:
                 outputs[var] = value
 
-        return CanonicalSimulationModel(
-            run_name=run_name,
-            crop=name_parts["crop"],
-            cultivar=name_parts["cultivar"],
-            irrigation=name_parts["irrigation"],
-            nitrogen_level=name_parts["nitrogen"],
-            planting_stage=name_parts["planting_stage"],
-            harvest_area=harvest_area,
-            year=year if isinstance(year, int) else 2024,
-            latitude=latitude,
-            longitude=longitude,
+        return CanonicalSimulation(
+            simulation={
+                "run_name": run_name,
+                "experiment_name": "",
+                "crop": name_parts["crop"],
+                "cultivar": name_parts["cultivar"],
+                "irrigation": name_parts["irrigation"],
+                "nitrogen_level": name_parts["nitrogen"],
+                "planting_stage": name_parts["planting_stage"],
+                "harvest_area": harvest_area,
+                "year": year if isinstance(year, int) else 2024,
+            },
+            location={
+                "latitude": latitude,
+                "longitude": longitude,
+                "country": None,
+                "state": None,
+                "district": None,
+                "ecological_zone": None,
+            },
             outputs=outputs,
         )
 
 
-def parse_summary_csv(file_path: str) -> List[CanonicalSimulationModel]:
+def parse_summary_csv(file_path: str) -> List[CanonicalSimulation]:
     """
     Parse a DSSAT summary CSV file.
 
@@ -278,7 +223,7 @@ def parse_summary_csv(file_path: str) -> List[CanonicalSimulationModel]:
         file_path: Path to the CSV file
 
     Returns:
-        List of CanonicalSimulationModel instances
+        List of CanonicalSimulation instances
     """
     return DSSATParser.parse_csv(file_path)
 
