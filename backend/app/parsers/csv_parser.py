@@ -1,8 +1,9 @@
 """CSV parser for DSSAT summary files."""
 import pandas as pd
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from app.models.canonical import CanonicalSimulation
+from app.models.canonical import CanonicalSimulation, SimulationModel, LocationModel
 
 
 class DSSATParser:
@@ -80,8 +81,9 @@ class DSSATParser:
         # Common patterns: pfrst30, vfrst30, etc.
         if len(parts) >= 4:
             # Try to identify planting stage (ends with numbers or common patterns)
-            cultivar_parts = parts[3:-1] if len(parts) > 4 else [parts[-1]]
-            result["cultivar"] = "_".join(cultivar_parts).strip() or ""
+            #cultivar_parts = parts[3:-1] if len(parts) > 4 else [parts[-1]]
+            #result["cultivar"] = "_".join(cultivar_parts).strip() or ""
+            result["cultivar"] = parts[3].strip() or ""
 
             if len(parts) >= 5:
                 # Last part is usually planting stage
@@ -142,41 +144,56 @@ class DSSATParser:
         # Read CSV with pandas
         df = pd.read_csv(file_path)
 
+        # Derive a sensible default experiment name from the file name
+        default_experiment_name = Path(file_path).stem
+
         results: List[CanonicalSimulation] = []
 
         for _, row in df.iterrows():
-            model = cls._parse_row(row)
+            model = cls._parse_row(row, default_experiment_name)
             if model:
                 results.append(model)
 
         return results
 
     @classmethod
-    def _parse_row(cls, row: pd.Series) -> Optional[CanonicalSimulation]:
+    def _parse_row(cls, row: pd.Series, default_experiment_name: str) -> Optional[CanonicalSimulation]:
         """
         Parse a single CSV row.
 
         Args:
             row: Pandas Series representing a row
+            default_experiment_name: Fallback experiment name derived from file name
 
         Returns:
             CanonicalSimulation or None if invalid
         """
-        # Extract location
-        latitude = cls.clean_value(row.get("LATITUDE"))
-        longitude = cls.clean_value(row.get("LONGITUDE"))
+        # Helper to read first available column from alternatives
+        def get_first(keys: List[str]) -> Any:
+            for k in keys:
+                if k in row:
+                    return row.get(k)
+            return None
+
+        # Extract location (support DSSAT variants)
+        latitude = cls.clean_value(get_first(["LATITUDE", "LAT", "Latitude", "lat"]))
+        longitude = cls.clean_value(get_first(["LONGITUDE", "LONG", "Longitude", "lon", "LON"]))
 
         # Skip rows without valid coordinates
         if latitude is None and longitude is None:
             return None
 
         # Parse RUN_NAME
-        run_name = cls.clean_value(row.get("RUN_NAME")) or ""
+        run_name = (
+            cls.clean_value(get_first(["RUN_NAME", "RUNNAME"]))
+            or cls.clean_value(get_first(["TNAM", "EXNAME"]))
+            or default_experiment_name
+        ) or ""
         name_parts = cls.parse_run_name(run_name)
 
         # Extract simulation metadata
-        harvest_area = cls.clean_value(row.get("HARVEST_AREA"))
-        year = cls.clean_value(row.get("WYEAR"))
+        harvest_area = cls.clean_value(get_first(["HARVEST_AREA", "HAREA", "HARVESTAREA"]))
+        year = cls.clean_value(get_first(["WYEAR", "YEAR"]))
 
         if isinstance(year, str):
             try:
@@ -191,26 +208,31 @@ class DSSATParser:
             if value is not None:
                 outputs[var] = value
 
+        # Build models with sensible fallbacks
+        simulation = SimulationModel(
+            run_name=run_name,
+            experiment_name=default_experiment_name,
+            crop=name_parts.get("crop", ""),
+            cultivar=name_parts.get("cultivar", ""),
+            irrigation=name_parts.get("irrigation", ""),
+            nitrogen_level=name_parts.get("nitrogen", ""),
+            planting_stage=name_parts.get("planting_stage", ""),
+            harvest_area=harvest_area,  # may be None
+            year=year if isinstance(year, int) else 2024,
+        )
+
+        location = LocationModel(
+            latitude=latitude,
+            longitude=longitude,
+            country=None,
+            state=None,
+            district=None,
+            ecological_zone=None,
+        )
+
         return CanonicalSimulation(
-            simulation={
-                "run_name": run_name,
-                "experiment_name": "",
-                "crop": name_parts["crop"],
-                "cultivar": name_parts["cultivar"],
-                "irrigation": name_parts["irrigation"],
-                "nitrogen_level": name_parts["nitrogen"],
-                "planting_stage": name_parts["planting_stage"],
-                "harvest_area": harvest_area,
-                "year": year if isinstance(year, int) else 2024,
-            },
-            location={
-                "latitude": latitude,
-                "longitude": longitude,
-                "country": None,
-                "state": None,
-                "district": None,
-                "ecological_zone": None,
-            },
+            simulation=simulation,
+            location=location,
             outputs=outputs,
         )
 
