@@ -1,15 +1,16 @@
 """Chat endpoint for query execution."""
+from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.schemas.query import ChatRequest, QueryResult
+from app.schemas.query import ChatRequest
 from app.agent.orchestrator import AgentOrchestrator
 
 router = APIRouter()
 
 
-@router.post("/", response_model=QueryResult)
+@router.post("/")
 async def chat_query(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
@@ -38,7 +39,7 @@ async def chat_query(
             )
         
         # Return structured response
-        return {
+        payload = {
             "answer": response.response.answer if response.response else "",
             "sources": [
                 {"type": s.type, "description": s.description}
@@ -53,6 +54,7 @@ async def chat_query(
             "query_plan": response.query_plan.model_dump() if response.query_plan else None,
             "timing": response.timing
         }
+        return payload
 
     except HTTPException:
         raise
@@ -63,7 +65,7 @@ async def chat_query(
         )
 
 
-def _parse_message_to_plan(message: str) -> QueryPlan:
+def _parse_message_to_plan(message: str):
     """
     Parse a natural language message into a QueryPlan.
 
@@ -130,13 +132,13 @@ def _parse_message_to_plan(message: str) -> QueryPlan:
     elif "rice" in msg_lower:
         crop = "Rice"
 
-    return QueryPlan(
-        intent=intent,
-        metric=metric,
-        aggregation=aggregation,
-        filters={
+    return {
+        "intent": intent,
+        "metric": metric,
+        "aggregation": aggregation,
+        "filters": {
             "crop": crop,
             "state": state,
             "year": year,
         },
-    )
+    }
