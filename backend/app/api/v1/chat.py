@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.schemas.query import ChatRequest
 from app.agent.orchestrator import AgentOrchestrator
+from app.core.config import get_settings
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ async def chat_query(
         Query result
     """
     try:
-        # Create orchestrator with database session
+        # Create orchestrator with database session (keys resolved internally)
         orchestrator = AgentOrchestrator(db_session=db)
         
         # Execute orchestration
@@ -49,6 +50,11 @@ async def chat_query(
                 response.context.metadata.simulations 
                 if response.context and response.context.metadata 
                 else []
+            ),
+            "statistics": (
+                response.context.statistics.model_dump()
+                if response.context and response.context.statistics
+                else None
             ),
             "confidence": response.response.confidence if response.response else "low",
             "query_plan": response.query_plan.model_dump() if response.query_plan else None,
