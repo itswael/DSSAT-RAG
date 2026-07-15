@@ -94,7 +94,7 @@ class MetadataResult(BaseModel):
     cultivars: List[str]
     """Available cultivars in results."""
     
-    years: List[int]
+    years: List[int] = []
     """Years covered by results."""
 
 
