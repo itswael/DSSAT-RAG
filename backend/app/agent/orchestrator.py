@@ -36,7 +36,7 @@ class AgentOrchestrator:
             response_api_key: OpenAI API key for response generation (optional)
         """
         self.db_session = db_session
-        self.planner = QueryPlanner(api_key=planner_api_key)
+        self.planner = QueryPlanner(api_key=planner_api_key, db_session=db_session)
         self.executor = Executor(db_session=db_session)
         self.context_builder = ContextBuilder()
         self.response_generator = ResponseGenerator(api_key=response_api_key)
