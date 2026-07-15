@@ -135,6 +135,13 @@ class Simulation(Base, TimestampMixin):
         comment="Date of planting",
     )
 
+    maturity_date: Mapped[str] = mapped_column(
+        Date,
+        nullable=True,
+        index=True,
+        comment="Date of maturity",
+    )
+
     harvest_date: Mapped[str] = mapped_column(
         Date,
         nullable=True,
