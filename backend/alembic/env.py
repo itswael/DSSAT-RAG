@@ -3,8 +3,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy import create_engine
 
 from alembic import context
 
@@ -32,7 +31,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = get_settings().DATABASE_URL
+    url = str(get_settings().DATABASE_URL)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -46,47 +45,17 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(
-        connection=connection,
-        target_metadata=target_metadata,
-        render_as_batch=True,  # Enable batch mode
-    )
-
+    context.configure(connection=connection, target_metadata=target_metadata, render_as_batch=True)
     with context.begin_transaction():
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with async engine."""
-    connectable = create_async_engine(
-        str(get_settings().DATABASE_URL),
-        poolclass=NullPool,
-    )
-
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-
-    await connectable.dispose()
-
-
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    connectable = create_async_engine(
-        str(get_settings().DATABASE_URL),
-        poolclass=NullPool,
-    )
-
-    if connectable.engine.dialect.name == "postgresql":
-        # For PostgreSQL, use async
-        import asyncio
-
-        asyncio.run(run_async_migrations())
-    else:
-        # For other databases, use sync
-        with connectable.connect() as connection:
-            do_run_migrations(connection)
-
-        connectable.dispose()
+    """Run migrations in 'online' mode using sync engine."""
+    engine = create_engine(str(get_settings().DATABASE_URL))
+    with engine.connect() as connection:
+        do_run_migrations(connection)
+    engine.dispose()
 
 
 if context.is_offline_mode():
