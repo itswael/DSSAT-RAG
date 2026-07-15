@@ -25,6 +25,70 @@ class StatisticsService:
         self.db = db
         self.sim_repo = SimulationRepository(db)
         self.output_repo = SimulationOutputRepository(db)
+
+    async def get_available_variables(self) -> List[str]:
+        """List distinct variable codes present in simulation_outputs."""
+        stmt = select(SimulationOutput.variable_code).distinct().order_by(SimulationOutput.variable_code)
+        result = await self.db.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def get_available_crops(self) -> List[str]:
+        """List distinct crops present in simulations."""
+        stmt = select(Simulation.crop).distinct().order_by(Simulation.crop)
+        result = await self.db.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def resolve_metric_from_text(self, text_query: str) -> Optional[str]:
+        """Resolve a variable_code from free text dynamically (no hardcoding)."""
+        q = text_query.lower()
+        variables = await self.get_available_variables()
+        vars_lower = {v.lower(): v for v in variables}
+        tokens = [t.strip(" ,.:;()[]{}") for t in q.split()]
+        # 1) direct code token match
+        for t in tokens:
+            if t in vars_lower:
+                return vars_lower[t]
+        # 2) simple expansions: remove dashes/underscores
+        norm = lambda s: s.replace("-", "").replace("_", "")
+        vars_norm = {norm(v.lower()): v for v in variables}
+        for t in tokens:
+            tn = norm(t)
+            if tn in vars_norm:
+                return vars_norm[tn]
+        # 3) light fuzzy: prefix/substring match (codes are short)
+        for v in variables:
+            lv = v.lower()
+            if any(lv in t or t in lv for t in tokens if len(t) >= 3):
+                return v
+        # 4) CDE enrichment (optional)
+        try:
+            from app.services.cde_service import CDEService
+            cde = CDEService()
+            all_defs = await cde.get_all_variables()
+            for item in all_defs:
+                code = item.get("code")
+                hay = " ".join([code or "", item.get("full_name", ""), item.get("description", "")]).lower()
+                if any(tok in hay for tok in tokens if len(tok) >= 3):
+                    if code in variables:
+                        return code
+        except Exception:
+            pass
+        return None
+
+    async def resolve_crop_from_text(self, text_query: str) -> Optional[str]:
+        """Resolve crop code from free text using DB-backed values only."""
+        q = text_query.lower()
+        crops = await self.get_available_crops()
+        crop_map = {c.lower(): c for c in crops}
+        for word in q.split():
+            w = word.strip(" ,.:;()[]{}")
+            if w in crop_map:
+                return crop_map[w]
+        # allow substring match if unique
+        candidates = [c for c in crops if c.lower() in q]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
     
     async def calculate_aggregation(
         self,
@@ -86,15 +150,17 @@ class StatisticsService:
         if sim_filters:
             stmt = stmt.where(*sim_filters)
         
+        logger.info(f"StatisticsService.calculate_aggregation var={variable_code} agg={aggregation} filters={{'crop': {crop}, 'cultivar': {cultivar}, 'year': {year}, 'state': {state}, 'district': {district}}}")
         result = await self.db.execute(stmt)
         row = result.fetchone()
+        logger.info(f"StatisticsService.calculate_aggregation result value={getattr(row, 'value', None)} count={getattr(row, 'count', 0)}")
         
         return {
             "aggregation_type": aggregation,
-            "variable_code": variable_code,
+            "metric": variable_code,
             "value": row.value if row else None,
             "count": row.count if row else 0,
-            "stddev": row.stddev if row and row.stddev else 0
+            "unit": None,
         }
     
     async def calculate_breakdown(
