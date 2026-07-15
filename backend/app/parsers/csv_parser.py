@@ -1,72 +1,9 @@
 """CSV parser for DSSAT summary files."""
 import pandas as pd
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-
-class CanonicalSimulationModel:
-    """Canonical simulation model structure."""
-
-    def __init__(
-        self,
-        run_name: str = "",
-        crop: str = "",
-        cultivar: str = "",
-        irrigation: str = "",
-        nitrogen_level: str = "",
-        planting_stage: str = "",
-        harvest_area: Optional[float] = None,
-        year: int = 2024,
-        latitude: Optional[float] = None,
-        longitude: Optional[float] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Initialize canonical simulation model.
-
-        Args:
-            run_name: Simulation run name
-            crop: Crop type code
-            cultivar: Cultivar name (user-defined)
-            irrigation: Irrigation method
-            nitrogen_level: Nitrogen application level
-            planting_stage: Planting stage description
-            harvest_area: Harvested area in hectares
-            year: Simulation year
-            latitude: Latitude coordinate
-            longitude: Longitude coordinate
-            outputs: Dictionary of output variables
-        """
-        self.run_name = run_name or ""
-        self.crop = crop or ""
-        self.cultivar = cultivar or ""
-        self.irrigation = irrigation or ""
-        self.nitrogen_level = nitrogen_level or ""
-        self.planting_stage = planting_stage or ""
-        self.harvest_area = harvest_area
-        self.year = year
-        self.latitude = latitude
-        self.longitude = longitude
-        self.outputs = outputs or {}
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert model to dictionary."""
-        return {
-            "simulation": {
-                "run_name": self.run_name,
-                "crop": self.crop,
-                "cultivar": self.cultivar,
-                "irrigation": self.irrigation,
-                "nitrogen_level": self.nitrogen_level,
-                "planting_stage": self.planting_stage,
-                "harvest_area": self.harvest_area,
-                "year": self.year,
-            },
-            "location": {
-                "latitude": self.latitude,
-                "longitude": self.longitude,
-            },
-            "outputs": self.outputs,
-        }
+from app.models.canonical import CanonicalSimulation, SimulationModel, LocationModel
 
 
 class DSSATParser:
@@ -144,8 +81,9 @@ class DSSATParser:
         # Common patterns: pfrst30, vfrst30, etc.
         if len(parts) >= 4:
             # Try to identify planting stage (ends with numbers or common patterns)
-            cultivar_parts = parts[3:-1] if len(parts) > 4 else [parts[-1]]
-            result["cultivar"] = "_".join(cultivar_parts).strip() or ""
+            #cultivar_parts = parts[3:-1] if len(parts) > 4 else [parts[-1]]
+            #result["cultivar"] = "_".join(cultivar_parts).strip() or ""
+            result["cultivar"] = parts[3].strip() or ""
 
             if len(parts) >= 5:
                 # Last part is usually planting stage
@@ -193,7 +131,7 @@ class DSSATParser:
         return value
 
     @classmethod
-    def parse_csv(cls, file_path: str) -> List[CanonicalSimulationModel]:
+    def parse_csv(cls, file_path: str) -> List[CanonicalSimulation]:
         """
         Parse a DSSAT summary CSV file.
 
@@ -201,46 +139,61 @@ class DSSATParser:
             file_path: Path to the CSV file
 
         Returns:
-            List of CanonicalSimulationModel instances
+            List of CanonicalSimulation instances
         """
         # Read CSV with pandas
         df = pd.read_csv(file_path)
 
-        results: List[CanonicalSimulationModel] = []
+        # Derive a sensible default experiment name from the file name
+        default_experiment_name = Path(file_path).stem
+
+        results: List[CanonicalSimulation] = []
 
         for _, row in df.iterrows():
-            model = cls._parse_row(row)
+            model = cls._parse_row(row, default_experiment_name)
             if model:
                 results.append(model)
 
         return results
 
     @classmethod
-    def _parse_row(cls, row: pd.Series) -> Optional[CanonicalSimulationModel]:
+    def _parse_row(cls, row: pd.Series, default_experiment_name: str) -> Optional[CanonicalSimulation]:
         """
         Parse a single CSV row.
 
         Args:
             row: Pandas Series representing a row
+            default_experiment_name: Fallback experiment name derived from file name
 
         Returns:
-            CanonicalSimulationModel or None if invalid
+            CanonicalSimulation or None if invalid
         """
-        # Extract location
-        latitude = cls.clean_value(row.get("LATITUDE"))
-        longitude = cls.clean_value(row.get("LONGITUDE"))
+        # Helper to read first available column from alternatives
+        def get_first(keys: List[str]) -> Any:
+            for k in keys:
+                if k in row:
+                    return row.get(k)
+            return None
+
+        # Extract location (support DSSAT variants)
+        latitude = cls.clean_value(get_first(["LATITUDE", "LAT", "Latitude", "lat"]))
+        longitude = cls.clean_value(get_first(["LONGITUDE", "LONG", "Longitude", "lon", "LON"]))
 
         # Skip rows without valid coordinates
         if latitude is None and longitude is None:
             return None
 
         # Parse RUN_NAME
-        run_name = cls.clean_value(row.get("RUN_NAME")) or ""
+        run_name = (
+            cls.clean_value(get_first(["RUN_NAME", "RUNNAME"]))
+            or cls.clean_value(get_first(["TNAM", "EXNAME"]))
+            or default_experiment_name
+        ) or ""
         name_parts = cls.parse_run_name(run_name)
 
         # Extract simulation metadata
-        harvest_area = cls.clean_value(row.get("HARVEST_AREA"))
-        year = cls.clean_value(row.get("WYEAR"))
+        harvest_area = cls.clean_value(get_first(["HARVEST_AREA", "HAREA", "HARVESTAREA"]))
+        year = cls.clean_value(get_first(["WYEAR", "YEAR"]))
 
         if isinstance(year, str):
             try:
@@ -255,22 +208,36 @@ class DSSATParser:
             if value is not None:
                 outputs[var] = value
 
-        return CanonicalSimulationModel(
+        # Build models with sensible fallbacks
+        simulation = SimulationModel(
             run_name=run_name,
-            crop=name_parts["crop"],
-            cultivar=name_parts["cultivar"],
-            irrigation=name_parts["irrigation"],
-            nitrogen_level=name_parts["nitrogen"],
-            planting_stage=name_parts["planting_stage"],
-            harvest_area=harvest_area,
+            experiment_name=default_experiment_name,
+            crop=name_parts.get("crop", ""),
+            cultivar=name_parts.get("cultivar", ""),
+            irrigation=name_parts.get("irrigation", ""),
+            nitrogen_level=name_parts.get("nitrogen", ""),
+            planting_stage=name_parts.get("planting_stage", ""),
+            harvest_area=harvest_area,  # may be None
             year=year if isinstance(year, int) else 2024,
+        )
+
+        location = LocationModel(
             latitude=latitude,
             longitude=longitude,
+            country=None,
+            state=None,
+            district=None,
+            ecological_zone=None,
+        )
+
+        return CanonicalSimulation(
+            simulation=simulation,
+            location=location,
             outputs=outputs,
         )
 
 
-def parse_summary_csv(file_path: str) -> List[CanonicalSimulationModel]:
+def parse_summary_csv(file_path: str) -> List[CanonicalSimulation]:
     """
     Parse a DSSAT summary CSV file.
 
@@ -278,7 +245,7 @@ def parse_summary_csv(file_path: str) -> List[CanonicalSimulationModel]:
         file_path: Path to the CSV file
 
     Returns:
-        List of CanonicalSimulationModel instances
+        List of CanonicalSimulation instances
     """
     return DSSATParser.parse_csv(file_path)
 

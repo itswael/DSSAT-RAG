@@ -59,7 +59,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
     connectable = create_async_engine(
-        get_settings().DATABASE_URL,
+        str(get_settings().DATABASE_URL),
         poolclass=NullPool,
     )
 
@@ -71,20 +71,10 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_settings().DATABASE_URL.replace(
-        "postgresql+psycopg", "postgresql"
+    connectable = create_async_engine(
+        str(get_settings().DATABASE_URL),
+        poolclass=NullPool,
     )
-
-    connectable = config.attributes.get("connection", None)
-
-    if connectable is None:
-        # only create Engine if we don't have a Connection
-        # from the outside
-        connectable = create_async_engine(
-            configuration["sqlalchemy.url"],
-            poolclass=NullPool,
-        )
 
     if connectable.engine.dialect.name == "postgresql":
         # For PostgreSQL, use async
