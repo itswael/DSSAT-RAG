@@ -14,7 +14,11 @@ from typing import Optional, Any, Dict, List
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from app.agent.models import QueryPlan, PlannerOutput, PlannerToolCall, SimulationToolInput, CDEToolInput, SemanticToolInput
+from app.agent.models import (
+    QueryPlan, PlannerOutput, PlannerToolCall,
+    SimulationToolInput, CDEToolInput, SemanticToolInput,
+    SemanticPlan, SemanticOperation, FilterCondition
+)
 from app.agent.prompts import get_planner_prompt
 from app.core.config import get_settings
 from app.services.statistics_service import StatisticsService
@@ -42,12 +46,14 @@ class QueryPlanner:
             self.client = None
         self._tool_registry: Optional[ToolRegistry] = None
         self._last_planner_output: Optional[PlannerOutput] = None
+        self._semantic_plan: Optional[SemanticPlan] = None
 
     async def plan(self, user_query: str) -> QueryPlan:
         """Plan query execution with Structured Outputs and dynamic tools.
 
         Returns a legacy QueryPlan for compatibility with current Executor.
         Also stores the last PlannerOutput for use by Executor v2 (if enabled).
+        NOTE: A semantic plan is also generated and stored for the executor.
         """
         logger.info(f"Planning query: {user_query}")
         logger.info(f"Planner LLM configured: key={'set' if bool(self.api_key) else 'missing'}, model={settings.OPENAI_MODEL}")
@@ -87,8 +93,15 @@ class QueryPlanner:
                 )
                 content = responses.output[0].content[0].text if getattr(responses, 'output', None) else None
                 if content:
+                    # Try semantic plan first
+                    sem = self._parse_semantic_plan(content)
+                    if sem:
+                        self._semantic_plan = sem
+                        return self._to_minimal_query_plan_from_semantic(sem)
+                    # Fallback to tool-based plan
                     plan_struct = self._parse_planner_output(content)
                     if plan_struct:
+                        self._semantic_plan = self._build_semantic_plan(user_query, plan_struct)
                         return self._to_legacy_query_plan(plan_struct, user_query)
             except Exception as e:
                 logger.info(f"Responses API unavailable or failed, falling back to Chat Completions: {e}")
@@ -120,8 +133,13 @@ class QueryPlanner:
                     except Exception:
                         plan_data = None
                 if plan_data is not None:
+                    sem = self._parse_semantic_plan(plan_data)
+                    if sem:
+                        self._semantic_plan = sem
+                        return self._to_minimal_query_plan_from_semantic(sem)
                     plan_struct = self._parse_planner_output(plan_data)
                     if plan_struct:
+                        self._semantic_plan = self._build_semantic_plan(user_query, plan_struct)
                         return self._to_legacy_query_plan(plan_struct, user_query)
 
             raise ValueError("No query plan generated via tool call or content")
@@ -160,6 +178,40 @@ class QueryPlanner:
         except Exception as e:
             logger.warning(f"Failed to parse PlannerOutput: {e}")
             return None
+
+    def _parse_semantic_plan(self, content: Any) -> Optional[SemanticPlan]:
+        """Parse content (str or dict) into SemanticPlan model."""
+        try:
+            data = content
+            if isinstance(content, str):
+                data = json.loads(content)
+            if isinstance(data, dict) and "operations" in data and "intent" in data:
+                sp = SemanticPlan(**data)
+                logger.info(f"SemanticPlan parsed with {len(sp.operations)} operation(s)")
+                return sp
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to parse SemanticPlan: {e}")
+            return None
+
+    def _to_minimal_query_plan_from_semantic(self, sp: SemanticPlan) -> QueryPlan:
+        """Return a minimal legacy QueryPlan to keep the pipeline compatible. The executor will prefer the semantic plan."""
+        metric = None
+        aggregation = None
+        filters: Dict[str, Any] = {}
+        for op in sp.operations:
+            if op.operation == "aggregate":
+                metric = metric or op.metric
+                aggregation = aggregation or op.aggregation
+                # Heuristic: map a simple '=' year filter to legacy filters for summary
+                for f in op.filters:
+                    if f.field == "year" and f.operator == "=" and isinstance(f.value, (int, str)):
+                        filters["year"] = f.value
+                    if f.field == "crop" and f.operator == "=" and isinstance(f.value, str):
+                        filters["crop"] = f.value
+                break
+        intent = "aggregate" if metric or aggregation else "metadata"
+        return QueryPlan(intent=intent, metric=metric, aggregation=aggregation, filters=filters, location=None, comparison=None, time_range=None, required_tools=["statistics"] if intent=="aggregate" else ["metadata"], response_type="summary")
 
     def _to_legacy_query_plan(self, po: PlannerOutput, user_query: str) -> QueryPlan:
         """Convert PlannerOutput into the existing QueryPlan structure for compatibility."""
@@ -214,6 +266,9 @@ class QueryPlanner:
     def get_last_planner_output(self) -> Optional[PlannerOutput]:
         """Expose the last successful PlannerOutput for downstream executor."""
         return getattr(self, "_last_planner_output", None)
+
+    def get_semantic_plan(self) -> Optional[SemanticPlan]:
+        return getattr(self, "_semantic_plan", None)
 
     async def plan_with_fallback(self, user_query: str) -> QueryPlan:
         """Plan query with fallback to simpler parsing and DB-driven enrichment."""
@@ -271,7 +326,10 @@ class QueryPlanner:
             return qp
         except Exception as e:
             logger.warning(f"LLM planning failed, using fallback: {e}")
-            return await self._fallback_plan(user_query)
+            qp = await self._fallback_plan(user_query)
+            # Build a minimal semantic plan from fallback
+            self._semantic_plan = self._fallback_semantic(user_query, qp)
+            return qp
 
     async def _fallback_plan(self, user_query: str) -> QueryPlan:
         """Create fallback plan using data-driven resolution only (no hardcoded maps)."""
@@ -365,3 +423,60 @@ class QueryPlanner:
             required_tools=required_tools,
             response_type="summary",
         )
+
+    def _build_semantic_plan(self, user_query: str, po: PlannerOutput) -> SemanticPlan:
+        """Heuristically convert PlannerOutput into a semantic plan.
+
+        This is an interim refactor: planner emits tools, we coerce into operations.
+        """
+        ops: List[SemanticOperation] = []
+        intent = "metadata"
+        for tc in po.tools:
+            if tc.tool == "query_simulation_data":
+                params: SimulationToolInput = tc.parameters  # type: ignore
+                metric = params.metrics[0] if params.metrics else None
+                agg = params.aggregation
+                filters: List[FilterCondition] = []
+                f = params.filters or {}
+                # Normalize year filter to operators
+                y = f.get("year")
+                if isinstance(y, list):
+                    # If exactly two numbers and planning intent is compare-ish, we cannot know; use IN for now
+                    filters.append(FilterCondition(field="year", operator="IN", value=y))
+                elif y is not None:
+                    filters.append(FilterCondition(field="year", operator="=", value=y))
+                for k in ["crop", "cultivar", "state", "district", "country"]:
+                    if f.get(k) is not None:
+                        filters.append(FilterCondition(field=k, operator="=", value=f[k]))
+                ops.append(SemanticOperation(operation="aggregate", metric=metric, aggregation=agg, filters=filters, group_by=params.group_by or [], independent=True))
+                intent = "aggregate"
+            elif tc.tool == "query_cde":
+                params: CDEToolInput = tc.parameters  # type: ignore
+                for v in params.variables or []:
+                    ops.append(SemanticOperation(operation="definition", variable=v, independent=True))
+                if not params.variables:
+                    ops.append(SemanticOperation(operation="definition", independent=True))
+                if intent == "metadata":
+                    intent = "definition"
+            elif tc.tool == "semantic_search":
+                params: SemanticToolInput = tc.parameters  # type: ignore
+                ops.append(SemanticOperation(operation="semantic_search", query=params.query, independent=True))
+                if intent == "metadata":
+                    intent = "explanation"
+        return SemanticPlan(goal=po.goal or user_query, intent=intent, operations=ops)
+
+    def _fallback_semantic(self, user_query: str, qp: QueryPlan) -> SemanticPlan:
+        ops: List[SemanticOperation] = []
+        filters: List[FilterCondition] = []
+        for k, v in (qp.filters or {}).items():
+            if k == "year" and isinstance(v, list):
+                filters.append(FilterCondition(field="year", operator="IN", value=v))
+            elif k == "year":
+                filters.append(FilterCondition(field="year", operator="=", value=v))
+            else:
+                filters.append(FilterCondition(field=k, operator="=", value=v))
+        if qp.intent == "aggregate":
+            ops.append(SemanticOperation(operation="aggregate", metric=qp.metric, aggregation=qp.aggregation, filters=filters, independent=True))
+        else:
+            ops.append(SemanticOperation(operation="metadata", filters=filters, independent=True))
+        return SemanticPlan(goal=user_query, intent=qp.intent or "metadata", operations=ops)
