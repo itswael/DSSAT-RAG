@@ -1,4 +1,8 @@
-"""Orchestrator - main agent coordinator."""
+"""Orchestrator - main agent coordinator.
+
+Flow:
+User → Planner (Structured Outputs) → Executor (parallel tools) → Context → Response Generator
+"""
 import logging
 from typing import Optional
 
@@ -14,6 +18,7 @@ from app.agent.planner import QueryPlanner
 from app.agent.executor import Executor
 from app.agent.context_builder import ContextBuilder
 from app.agent.response_generator import ResponseGenerator
+from app.agent.models import PlannerOutput
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +69,12 @@ class AgentOrchestrator:
             plan_start = datetime.now()
             query_plan = await self.planner.plan_with_fallback(user_query)
             timing["planning"] = (datetime.now() - plan_start).total_seconds()
+            planner_output: PlannerOutput | None = self.planner.get_last_planner_output()
             
             # Step 2: Execute tools
             logger.info(f"Step 2: Executing tools - {query_plan.required_tools}")
             exec_start = datetime.now()
-            context = await self.executor.execute(query_plan)
+            context = await self.executor.execute(query_plan, planner_output=planner_output)
             timing["execution"] = (datetime.now() - exec_start).total_seconds()
             
             # Step 3: Generate response
