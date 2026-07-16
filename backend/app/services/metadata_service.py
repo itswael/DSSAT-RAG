@@ -30,7 +30,7 @@ class MetadataService:
         self,
         crop: Optional[str] = None,
         cultivar: Optional[str] = None,
-        year: Optional[int] = None,
+        year: Optional[object] = None,
         state: Optional[str] = None,
         district: Optional[str] = None,
         country: Optional[str] = None,
@@ -51,6 +51,13 @@ class MetadataService:
         Returns:
             List of simulation records as dictionaries
         """
+        # Normalize multi-year strings like "2015,2016" to a list of ints
+        if isinstance(year, str) and "," in year:
+            try:
+                year = [int(y.strip()) for y in year.split(",") if y.strip()]
+            except Exception:
+                pass
+
         filters = {
             "crop": crop,
             "cultivar": cultivar,
