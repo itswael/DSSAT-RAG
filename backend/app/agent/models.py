@@ -1,6 +1,6 @@
 """Agent orchestrator Pydantic models."""
 from datetime import date
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -219,6 +219,77 @@ class ResponseGeneration(BaseModel):
     
     limitations: Optional[List[str]] = None
     """Known limitations or caveats."""
+
+
+# =============================================================================
+# AGENTIC PLANNER V2 (Structured Outputs)
+# =============================================================================
+
+ToolName = Literal["query_simulation_data", "query_cde", "semantic_search"]
+
+
+class SimulationSpatialInput(BaseModel):
+    type: Optional[Literal["radius", "polygon", "country", "state", "district", "bounding_box", "nearest"]] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    radius_meters: Optional[int] = None
+    polygon_wkt: Optional[str] = None
+    country: Optional[str] = None
+    state: Optional[str] = None
+    district: Optional[str] = None
+    bounding_box: Optional[Dict[str, float]] = None
+
+
+class SimulationToolInput(BaseModel):
+    filters: Dict[str, Any] = Field(default_factory=dict)
+    metrics: List[str] = Field(default_factory=list)
+    aggregation: Optional[Literal["AVG", "MAX", "MIN", "COUNT", "SUM"]] = None
+    group_by: List[str] = Field(default_factory=list)
+    spatial: Optional[SimulationSpatialInput] = None
+
+
+class SimulationStatistics(BaseModel):
+    aggregation_type: Optional[str] = None
+    metric: Optional[str] = None
+    value: Optional[float] = None
+    count: int = 0
+    breakdown: Optional[Dict[str, Any]] = None
+    unit: Optional[str] = None
+
+
+class SimulationToolOutput(BaseModel):
+    simulations: List[Dict[str, Any]] = Field(default_factory=list)
+    statistics: Optional[SimulationStatistics] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CDEToolInput(BaseModel):
+    variables: List[str] = Field(default_factory=list)
+    cultivars: List[str] = Field(default_factory=list)
+
+
+class CDEToolOutput(BaseModel):
+    definitions: Dict[str, Any] = Field(default_factory=dict)
+    relationships: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticToolInput(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class SemanticToolOutput(BaseModel):
+    documents: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class PlannerToolCall(BaseModel):
+    tool: ToolName
+    parameters: Union[SimulationToolInput, CDEToolInput, SemanticToolInput]
+
+
+class PlannerOutput(BaseModel):
+    goal: str
+    tools: List[PlannerToolCall]
 
 
 # =============================================================================
