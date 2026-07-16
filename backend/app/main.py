@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import api_router
 from app.core.config import get_settings
+from app.db.session import AsyncSessionLocal
+from app.agent.tool_registry import ToolRegistry
 
 
 def create_app() -> FastAPI:
@@ -39,6 +41,18 @@ def create_app() -> FastAPI:
 
     # Include routers under /api to match documented paths
     app.include_router(api_router, prefix="/api")
+
+    @app.on_event("startup")
+    async def _warm_tool_capabilities():
+        try:
+            async with AsyncSessionLocal() as session:
+                registry = ToolRegistry(session)
+                caps = await registry.load_capabilities()
+                logging.getLogger(__name__).info(
+                    f"Loaded tool capabilities: simulation metrics={len(caps.get('tools', [])[0].get('supported_metrics', []))}"
+                )
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Tool capabilities warm-up failed: {e}")
 
     @app.get("/")
     async def root() -> dict:
