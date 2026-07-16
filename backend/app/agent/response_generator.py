@@ -69,17 +69,28 @@ class ResponseGenerator:
         prompt = get_response_prompt(context, user_question)
 
         try:
-            # Use Chat Completions
-            response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL or "gpt-oss-120b",
-                temperature=0.3,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-
-            answer = response.choices[0].message.content or ""
+            # Prefer Responses API with text output
+            try:
+                resp = await self.client.responses.create(
+                    model=settings.OPENAI_MODEL or "gpt-4o-mini",
+                    input=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                )
+                answer = resp.output_text if hasattr(resp, "output_text") else None
+            except Exception:
+                # Fallback to Chat Completions
+                cc = await self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL or "gpt-4o-mini",
+                    temperature=0.3,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                answer = cc.choices[0].message.content or ""
 
             sources = self._build_sources(context)
             confidence = self._assess_confidence(context, answer)
