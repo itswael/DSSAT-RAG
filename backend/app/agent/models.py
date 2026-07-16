@@ -136,6 +136,11 @@ class StatisticsResult(BaseModel):
     """Unit of measurement."""
 
 
+class MultiStatisticsResult(BaseModel):
+    """Support multiple statistics (e.g., MAX and MIN) in one response."""
+    results: List[StatisticsResult]
+
+
 class CDEResult(BaseModel):
     """CDE tool result."""
     
@@ -174,9 +179,11 @@ class LLMContext(BaseModel):
     
     metadata: Optional[MetadataResult] = None
     statistics: Optional[StatisticsResult] = None
+    additional_statistics: Optional[List[StatisticsResult]] = None
     spatial: Optional[SpatialResult] = None
     cde: Optional[CDEResult] = None
     embeddings: Optional[List[EmbeddingResult]] = None
+    tool_outputs: Optional[List[Dict[str, Any]]] = None
     
     query_summary: str
     """Natural language summary of what was found."""
@@ -290,6 +297,39 @@ class PlannerToolCall(BaseModel):
 class PlannerOutput(BaseModel):
     goal: str
     tools: List[PlannerToolCall]
+
+
+# =============================================================================
+# SEMANTIC PLANNER (Production-grade)
+# =============================================================================
+
+Operator = Literal["=", "!=", ">", ">=", "<", "<=", "BETWEEN", "IN", "LIKE", "CONTAINS"]
+
+
+class FilterCondition(BaseModel):
+    field: str
+    operator: Operator
+    value: Union[str, int, float, List[Union[str, int, float]]]
+
+
+class SemanticOperation(BaseModel):
+    operation: Literal["aggregate", "definition", "semantic_search", "metadata", "trend", "explanation", "spatial"]
+    metric: Optional[str] = None
+    aggregation: Optional[Literal["AVG", "MIN", "MAX", "COUNT", "SUM"]] = None
+    filters: List[FilterCondition] = Field(default_factory=list)
+    group_by: List[str] = Field(default_factory=list)
+    independent: bool = True
+    variable: Optional[str] = None  # for definition ops
+    query: Optional[str] = None     # for semantic_search ops
+
+
+class SemanticPlan(BaseModel):
+    goal: str
+    intent: Literal["aggregate", "compare", "trend", "definition", "explanation", "metadata", "hybrid"]
+    operations: List[SemanticOperation]
+    comparison_axis: Optional[str] = None
+    comparison_mode: Optional[Literal["independent", "combined"]] = None
+    comparison_values: Optional[List[Union[str, int, float]]] = None
 
 
 # =============================================================================
