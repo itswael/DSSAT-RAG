@@ -28,6 +28,22 @@ class SimulationTool:
 
     async def run(self, params: SimulationToolInput) -> SimulationToolOutput:
         filters = params.filters or {}
+        # Normalize multi-year strings like "2015,2016" to a list of ints
+        y = filters.get("year")
+        if isinstance(y, str) and "," in y:
+            try:
+                filters["year"] = [int(v.strip()) for v in y.split(",") if v.strip()]
+            except Exception:
+                pass
+        # Resolve crop text to database code if needed (e.g., Maize -> MZ)
+        if filters.get("crop"):
+            try:
+                resolved = await self.stats.resolve_crop_code(str(filters["crop"]))
+                if resolved:
+                    filters["crop"] = resolved
+            except Exception:
+                pass
+
         # Fetch simulations: spatial first if provided, else metadata filters
         simulations = []
         if params.spatial and params.spatial.type:
@@ -60,6 +76,7 @@ class SimulationTool:
             simulations = await self.meta.get_simulations(**filters)
 
         statistics = None
+        # Optional: include extremum location when MIN/MAX requested
         if params.metrics and params.aggregation:
             metric = params.metrics[0]
             agg = params.aggregation
@@ -71,6 +88,31 @@ class SimulationTool:
                 year=filters.get("year"),
             )
             statistics = SimulationStatistics(**stat)
+            if agg in ("MIN", "MAX"):
+                try:
+                    ext = await self.stats.get_extremum_simulation(
+                        variable_code=metric,
+                        aggregation=agg,
+                        crop=filters.get("crop"),
+                        cultivar=filters.get("cultivar"),
+                        year=filters.get("year"),
+                    )
+                    if ext:
+                        # attach location into breakdown for rendering
+                        statistics.breakdown = {
+                            **(statistics.breakdown or {}),
+                            "extremum_location": {
+                                "latitude": ext.get("latitude"),
+                                "longitude": ext.get("longitude"),
+                                "country": ext.get("country"),
+                                "state": ext.get("state"),
+                                "district": ext.get("district"),
+                                "year": ext.get("year"),
+                                "simulation_id": ext.get("simulation_id"),
+                            }
+                        }
+                except Exception:
+                    pass
 
         return SimulationToolOutput(
             simulations=simulations,
