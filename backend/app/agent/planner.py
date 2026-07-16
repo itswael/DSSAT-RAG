@@ -1,16 +1,24 @@
-"""Query Planner - converts natural language to QueryPlan."""
+"""Query Planner - converts natural language to structured execution plan.
+
+Refactored to support production-grade Agentic Retrieval planning:
+- Uses OpenAI Responses API (Structured Outputs) when available
+- Injects dynamic Tool specifications (not DB schemas/SQL)
+- Returns a structured PlannerOutput with explicit tool calls
+- Never answers; only plans tools and parameters
+"""
 import json
 import logging
 import re
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from app.agent.models import QueryPlan
+from app.agent.models import QueryPlan, PlannerOutput, PlannerToolCall, SimulationToolInput, CDEToolInput, SemanticToolInput
 from app.agent.prompts import get_planner_prompt
 from app.core.config import get_settings
 from app.services.statistics_service import StatisticsService
+from app.agent.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,115 +40,69 @@ class QueryPlanner:
                 self.client = AsyncOpenAI(api_key=self.api_key)
         else:
             self.client = None
+        self._tool_registry: Optional[ToolRegistry] = None
+        self._last_planner_output: Optional[PlannerOutput] = None
 
     async def plan(self, user_query: str) -> QueryPlan:
-        """Plan query execution using LLM tool-calling."""
+        """Plan query execution with Structured Outputs and dynamic tools.
+
+        Returns a legacy QueryPlan for compatibility with current Executor.
+        Also stores the last PlannerOutput for use by Executor v2 (if enabled).
+        """
         logger.info(f"Planning query: {user_query}")
         logger.info(f"Planner LLM configured: key={'set' if bool(self.api_key) else 'missing'}, model={settings.OPENAI_MODEL}")
 
         if not self.client:
             return await self._fallback_plan(user_query)
 
-        prompt = get_planner_prompt(user_query)
+        # Inject dynamic tool specs
+        planner_context = ""
+        try:
+            db = None
+            if self.db_session is not None:
+                if hasattr(self.db_session, 'session'):
+                    db = await self.db_session.session()
+                else:
+                    db = self.db_session
+            if db is not None:
+                self._tool_registry = ToolRegistry(db)
+                planner_context = await self._tool_registry.get_planner_context()
+        except Exception as e:
+            logger.warning(f"Failed to load dynamic tool specs: {e}")
+
+        prompt = get_planner_prompt(user_query) + ("\n\n" + planner_context if planner_context else "")
 
         try:
+            # Prefer Responses API if available on this OpenAI-compatible endpoint.
+            # Fallback to Chat Completions tool calling as before.
+            try:
+                responses = await self.client.responses.create(
+                    model=settings.OPENAI_MODEL or "gpt-4o-mini",
+                    input=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": PlannerOutput.model_json_schema(),
+                    },
+                )
+                content = responses.output[0].content[0].text if getattr(responses, 'output', None) else None
+                if content:
+                    plan_struct = self._parse_planner_output(content)
+                    if plan_struct:
+                        return self._to_legacy_query_plan(plan_struct, user_query)
+            except Exception as e:
+                logger.info(f"Responses API unavailable or failed, falling back to Chat Completions: {e}")
+
             response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL or "gpt-oss-120b",
+                model=settings.OPENAI_MODEL or "gpt-4o-mini",
                 temperature=0.1,
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "query_plan",
-                            "description": "Generate a query execution plan from natural language",
-                            "parameters": QueryPlan.model_json_schema(),
-                        },
-                    }
-                ],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "query_plan"},
-                },
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
             )
 
             choice = response.choices[0]
-            tool_calls = getattr(choice.message, "tool_calls", None) or []
-            logger.info(f"Planner tool_calls count: {len(tool_calls)}")
-            for call in tool_calls:
-                if call.type == "function" and call.function and call.function.name == "query_plan":
-                    raw_args = call.function.arguments or "{}"
-                    logger.info(f"Planner raw tool args: {raw_args}")
-                    try:
-                        plan_data = json.loads(raw_args)
-                    except Exception:
-                        try:
-                            plan_data = json.loads(json.loads(raw_args))
-                        except Exception:
-                            logger.warning("Planner returned non-JSON tool arguments; falling back")
-                            raise ValueError("Invalid tool arguments")
-                    # Coerce common LLM schema drift into expected shape
-                    try:
-                        if not isinstance(plan_data, dict):
-                            plan_data = {}
-                        # Accept alternate key names
-                        if "filter" in plan_data and "filters" not in plan_data:
-                            plan_data["filters"] = plan_data.pop("filter") if isinstance(plan_data.get("filter"), dict) else {}
-                        # Accept other variants for tools
-                        if "tools" in plan_data and "required_tools" not in plan_data:
-                            plan_data["required_tools"] = plan_data.pop("tools")
-                        if "tool" in plan_data and "required_tools" not in plan_data:
-                            plan_data["required_tools"] = [plan_data.pop("tool")]
-                        if "requiredTools" in plan_data and "required_tools" not in plan_data:
-                            rt = plan_data.pop("requiredTools")
-                            plan_data["required_tools"] = rt if isinstance(rt, list) else ["metadata"]
-                        # Normalize aggregation to uppercase literal
-                        if plan_data.get("aggregation"):
-                            plan_data["aggregation"] = str(plan_data["aggregation"]).upper()
-                            if plan_data["aggregation"] in {"AVERAGE", "MEAN"}:
-                                plan_data["aggregation"] = "AVG"
-                        # Normalize intent if it's an unexpected value
-                        allowed_intents = {"metadata", "aggregate", "spatial_search", "comparison", "trend", "explanation", "hybrid"}
-                        intent = plan_data.get("intent")
-                        ql = user_query.lower()
-                        if not intent or intent not in allowed_intents:
-                            if any(w in ql for w in ["average", "avg", "mean", "total", "sum"]) or plan_data.get("aggregation") or plan_data.get("metric"):
-                                plan_data["intent"] = "aggregate"
-                            else:
-                                plan_data["intent"] = "metadata"
-                        # Ensure filters exists and move stray top-level filters into it
-                        if not isinstance(plan_data.get("filters"), dict):
-                            plan_data["filters"] = {}
-                        flt = plan_data["filters"]
-                        for key in ["crop", "cultivar", "year", "state", "district", "country"]:
-                            if key in plan_data and key not in flt:
-                                flt[key] = plan_data.pop(key)
-                        plan_data["filters"] = flt
-                        # Ensure required_tools contains needed tools
-                        allowed_tools = {"metadata", "spatial", "statistics", "cde", "embedding"}
-                        if not isinstance(plan_data.get("required_tools"), list):
-                            plan_data["required_tools"] = ["metadata"]
-                        # Filter out any non-allowed tools from the list
-                        plan_data["required_tools"] = [t for t in plan_data["required_tools"] if isinstance(t, str) and t in allowed_tools]
-                        if not plan_data["required_tools"]:
-                            plan_data["required_tools"] = ["metadata"]
-                        if plan_data.get("intent") == "aggregate" and "statistics" not in plan_data["required_tools"]:
-                            plan_data["required_tools"].append("statistics")
-                        # Validate response_type, default to summary on bad values
-                        if plan_data.get("response_type") not in {"summary", "detailed", "comparison", "trend"}:
-                            plan_data["response_type"] = "summary"
-                        # Drop any unknown top-level keys to avoid validation errors
-                        allowed = set(QueryPlan.model_fields.keys())
-                        plan_data = {k: v for k, v in plan_data.items() if k in allowed}
-                    except Exception as coerce_err:
-                        logger.warning(f"Planner schema coercion failed: {coerce_err}")
-                    query_plan = QueryPlan(**plan_data)
-                    logger.info(f"Generated query plan: intent={query_plan.intent}, metric={query_plan.metric}, aggregation={query_plan.aggregation}, filters={query_plan.filters}")
-                    return query_plan
-
-            # If no valid tool call, try parsing JSON directly from content
+            # Try parsing JSON directly from content as PlannerOutput
             raw_content = getattr(choice.message, "content", None)
             if raw_content:
                 logger.info(f"Planner raw message content: {raw_content[:400]}")
@@ -158,51 +120,9 @@ class QueryPlanner:
                     except Exception:
                         plan_data = None
                 if plan_data is not None:
-                    try:
-                        if not isinstance(plan_data, dict):
-                            plan_data = {}
-                        if "filter" in plan_data and "filters" not in plan_data:
-                            plan_data["filters"] = plan_data.pop("filter") if isinstance(plan_data.get("filter"), dict) else {}
-                        if "tools" in plan_data and "required_tools" not in plan_data:
-                            plan_data["required_tools"] = plan_data.pop("tools")
-                        if "tool" in plan_data and "required_tools" not in plan_data:
-                            plan_data["required_tools"] = [plan_data.pop("tool")]
-                        if plan_data.get("aggregation"):
-                            plan_data["aggregation"] = str(plan_data["aggregation"]).upper()
-                            if plan_data["aggregation"] in {"AVERAGE", "MEAN"}:
-                                plan_data["aggregation"] = "AVG"
-                        allowed_intents = {"metadata", "aggregate", "spatial_search", "comparison", "trend", "explanation", "hybrid"}
-                        intent = plan_data.get("intent")
-                        if not intent or intent not in allowed_intents:
-                            ql = user_query.lower()
-                            if any(w in ql for w in ["average", "avg", "mean", "total", "sum"]) or plan_data.get("aggregation") or plan_data.get("metric"):
-                                plan_data["intent"] = "aggregate"
-                            else:
-                                plan_data["intent"] = "metadata"
-                        if not isinstance(plan_data.get("filters"), dict):
-                            plan_data["filters"] = {}
-                        flt = plan_data["filters"]
-                        for key in ["crop", "cultivar", "year", "state", "district", "country"]:
-                            if key in plan_data and key not in flt:
-                                flt[key] = plan_data.pop(key)
-                        plan_data["filters"] = flt
-                        allowed_tools = {"metadata", "spatial", "statistics", "cde", "embedding"}
-                        if not isinstance(plan_data.get("required_tools"), list):
-                            plan_data["required_tools"] = ["metadata"]
-                        plan_data["required_tools"] = [t for t in plan_data["required_tools"] if isinstance(t, str) and t in allowed_tools]
-                        if not plan_data["required_tools"]:
-                            plan_data["required_tools"] = ["metadata"]
-                        if plan_data.get("intent") == "aggregate" and "statistics" not in plan_data["required_tools"]:
-                            plan_data["required_tools"].append("statistics")
-                        if plan_data.get("response_type") not in {"summary", "detailed", "comparison", "trend"}:
-                            plan_data["response_type"] = "summary"
-                        allowed = set(QueryPlan.model_fields.keys())
-                        plan_data = {k: v for k, v in plan_data.items() if k in allowed}
-                    except Exception as coerce_err:
-                        logger.warning(f"Planner content schema coercion failed: {coerce_err}")
-                    query_plan = QueryPlan(**plan_data)
-                    logger.info(f"Generated query plan (content): intent={query_plan.intent}, metric={query_plan.metric}, aggregation={query_plan.aggregation}, filters={query_plan.filters}")
-                    return query_plan
+                    plan_struct = self._parse_planner_output(plan_data)
+                    if plan_struct:
+                        return self._to_legacy_query_plan(plan_struct, user_query)
 
             raise ValueError("No query plan generated via tool call or content")
 
@@ -212,6 +132,88 @@ class QueryPlanner:
         except Exception as e:
             logger.error(f"Planning failed: {e}")
             raise
+
+    def _parse_planner_output(self, content: Any) -> Optional[PlannerOutput]:
+        """Parse content (str or dict) into PlannerOutput model."""
+        try:
+            data = content
+            if isinstance(content, str):
+                data = json.loads(content)
+            # Coerce planner tools params into typed inputs
+            if isinstance(data, dict) and isinstance(data.get("tools"), list):
+                tools: List[Dict[str, Any]] = []
+                for t in data["tools"]:
+                    name = t.get("tool")
+                    params = t.get("parameters", {})
+                    if name == "query_simulation_data":
+                        params = SimulationToolInput(**params)
+                    elif name == "query_cde":
+                        params = CDEToolInput(**params)
+                    elif name == "semantic_search":
+                        params = SemanticToolInput(**params)
+                    tools.append({"tool": name, "parameters": params})
+                data = {"goal": data.get("goal", ""), "tools": tools}
+            po = PlannerOutput(**data)
+            logger.info(f"PlannerOutput parsed with {len(po.tools)} tool(s)")
+            self._last_planner_output = po
+            return po
+        except Exception as e:
+            logger.warning(f"Failed to parse PlannerOutput: {e}")
+            return None
+
+    def _to_legacy_query_plan(self, po: PlannerOutput, user_query: str) -> QueryPlan:
+        """Convert PlannerOutput into the existing QueryPlan structure for compatibility."""
+        required_tools_map = {
+            "query_simulation_data": ["metadata", "statistics", "spatial"],
+            "query_cde": ["cde"],
+            "semantic_search": ["embedding"],
+        }
+        required: List[str] = []
+        metric: Optional[str] = None
+        aggregation: Optional[str] = None
+        filters: Dict[str, Any] = {}
+        location = None
+
+        for tc in po.tools:
+            required.extend([t for t in required_tools_map.get(tc.tool, []) if t not in required])
+            if tc.tool == "query_simulation_data":
+                params: SimulationToolInput = tc.parameters  # type: ignore
+                # adopt first non-empty
+                if not metric and params.metrics:
+                    metric = params.metrics[0]
+                aggregation = aggregation or params.aggregation
+                filters.update(params.filters or {})
+                # map spatial to legacy location if needed (kept None here to avoid changing existing models)
+
+        # Infer intent
+        intent = "metadata"
+        if metric or aggregation:
+            intent = "aggregate"
+
+        if intent == "aggregate" and "statistics" not in required:
+            required.append("statistics")
+        if not required:
+            required = ["metadata"]
+
+        qp = QueryPlan(
+            intent=intent,
+            metric=metric,
+            aggregation=aggregation,
+            filters=filters,
+            location=None,
+            comparison=None,
+            time_range=None,
+            required_tools=required,  # executor will still use dynamic dispatch soon
+            response_type="summary",
+        )
+        logger.info(
+            f"Generated legacy QueryPlan from PlannerOutput: intent={qp.intent}, metric={qp.metric}, agg={qp.aggregation}, tools={qp.required_tools}"
+        )
+        return qp
+
+    def get_last_planner_output(self) -> Optional[PlannerOutput]:
+        """Expose the last successful PlannerOutput for downstream executor."""
+        return getattr(self, "_last_planner_output", None)
 
     async def plan_with_fallback(self, user_query: str) -> QueryPlan:
         """Plan query with fallback to simpler parsing and DB-driven enrichment."""
