@@ -1,4 +1,8 @@
-"""Executor - executes tools in parallel based on QueryPlan."""
+"""Executor - executes tools in parallel based on Planner output.
+
+Refactored for dynamic tool dispatch with asyncio.gather.
+Maintains compatibility with legacy QueryPlan.required_tools for now.
+"""
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -7,6 +11,11 @@ from datetime import datetime
 
 from app.agent.models import (
     QueryPlan,
+    PlannerOutput,
+    PlannerToolCall,
+    SimulationToolInput,
+    CDEToolInput,
+    SemanticToolInput,
     MetadataResult,
     SpatialResult,
     StatisticsResult,
@@ -36,7 +45,7 @@ class Executor:
         """
         self.db_session = db_session
     
-    async def execute(self, query_plan: QueryPlan) -> LLMContext:
+    async def execute(self, query_plan: QueryPlan, planner_output: Optional[PlannerOutput] = None) -> LLMContext:
         """
         Execute tools based on query plan.
         
@@ -58,47 +67,43 @@ class Executor:
         cde_service = CDEService()
         embedding_service = EmbeddingService()
         
-        # Execute tools in parallel
+        # If we have a PlannerOutput with explicit tools, use it for dynamic dispatch
+        if planner_output and planner_output.tools:
+            return await self._execute_from_planner_output(
+                db=db,
+                planner_output=planner_output,
+                timing=timing,
+                errors=errors,
+            )
+
+        # Dynamic dispatch (legacy): build task list based on inferred required tools
         tasks = []
-        
+        task_names = []
+
+        # Legacy mapping: we don't yet store PlannerOutput, so use required_tools
         if "metadata" in query_plan.required_tools:
-            tasks.append(self._execute_metadata(
-                metadata_service, query_plan, timing, errors
-            ))
-        
+            tasks.append(self._execute_metadata(metadata_service, query_plan, timing, errors))
+            task_names.append("metadata")
         if "spatial" in query_plan.required_tools:
-            tasks.append(self._execute_spatial(
-                spatial_service, query_plan, timing, errors
-            ))
-        
+            tasks.append(self._execute_spatial(spatial_service, query_plan, timing, errors))
+            task_names.append("spatial")
         if "statistics" in query_plan.required_tools:
-            tasks.append(self._execute_statistics(
-                statistics_service, query_plan, timing, errors
-            ))
-        
+            tasks.append(self._execute_statistics(statistics_service, query_plan, timing, errors))
+            task_names.append("statistics")
         if "cde" in query_plan.required_tools:
             tasks.append(self._execute_cde(cde_service, query_plan, timing, errors))
-        
+            task_names.append("cde")
         if "embedding" in query_plan.required_tools:
-            tasks.append(self._execute_embedding(
-                embedding_service, query_plan, timing, errors
-            ))
-        
-        # Run all tasks concurrently
+            tasks.append(self._execute_embedding(embedding_service, query_plan, timing, errors))
+            task_names.append("embedding")
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Process results
-        context_data = {}
-        
+
+        context_data: Dict[str, Any] = {}
         for i, result in enumerate(results):
-            tool_name = query_plan.required_tools[i]
-            
+            tool_name = task_names[i]
             if isinstance(result, Exception):
-                errors.append(ToolError(
-                    tool_name=tool_name,
-                    error_type=type(result).__name__,
-                    message=str(result)
-                ))
+                errors.append(ToolError(tool_name=tool_name, error_type=type(result).__name__, message=str(result)))
                 logger.error(f"Tool {tool_name} failed: {result}")
             else:
                 context_data[tool_name] = result
@@ -118,6 +123,107 @@ class Executor:
         total_time = (datetime.now() - start_time).total_seconds()
         timing["total"] = total_time
         
+        return llm_context
+
+    async def _execute_from_planner_output(
+        self,
+        db,
+        planner_output: PlannerOutput,
+        timing: Dict[str, float],
+        errors: List[ToolError],
+    ) -> LLMContext:
+        start_time = datetime.now()
+
+        # Instantiate tool wrappers
+        from app.agent.tools import SimulationTool, CDETool, SemanticTool
+
+        sim_tool = SimulationTool(db)
+        cde_tool = CDETool()
+        sem_tool = SemanticTool()
+
+        tasks = []
+        names: List[str] = []
+
+        for call in planner_output.tools:
+            if call.tool == "query_simulation_data":
+                tasks.append(sim_tool.run(call.parameters))
+                names.append("simulation")
+            elif call.tool == "query_cde":
+                tasks.append(cde_tool.run(call.parameters))
+                names.append("cde")
+            elif call.tool == "semantic_search":
+                tasks.append(sem_tool.run(call.parameters))
+                names.append("semantic")
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Map tool outputs to context models
+        metadata_res: Optional[MetadataResult] = None
+        statistics_res: Optional[StatisticsResult] = None
+        cde_res: Optional[CDEResult] = None
+        embeddings_res: List[EmbeddingResult] = []
+
+        for i, result in enumerate(results):
+            name = names[i]
+            if isinstance(result, Exception):
+                errors.append(ToolError(tool_name=name, error_type=type(result).__name__, message=str(result)))
+                logger.error(f"Tool {name} failed: {result}")
+                continue
+            if name == "simulation":
+                # Build MetadataResult
+                sims = result.simulations or []
+                metadata_res = MetadataResult(
+                    simulations=sims,
+                    total_count=len(sims),
+                    crops=list({s.get("crop") for s in sims if s.get("crop")}),
+                    cultivars=list({s.get("cultivar") for s in sims if s.get("cultivar")}),
+                )
+                # Build StatisticsResult if present
+                if result.statistics and result.statistics.metric:
+                    statistics_res = StatisticsResult(
+                        aggregation_type=result.statistics.aggregation_type or "",
+                        metric=result.statistics.metric or "",
+                        value=result.statistics.value,
+                        count=result.statistics.count,
+                        breakdown=result.statistics.breakdown,
+                        unit=result.statistics.unit,
+                    )
+                timing["query_simulation_data"] = (datetime.now() - start_time).total_seconds()
+            elif name == "cde":
+                var_defs = []
+                for code, d in (result.definitions or {}).items():
+                    d = dict(d)
+                    d.setdefault("code", code)
+                    var_defs.append(d)
+                rels = []
+                for code, rel in (result.relationships or {}).items():
+                    rels.append({"variable": code, "related": rel})
+                cde_res = CDEResult(variable_definitions=var_defs, relationships=rels)
+                timing["query_cde"] = (datetime.now() - start_time).total_seconds()
+            elif name == "semantic":
+                docs = result.documents or []
+                if docs:
+                    embeddings_res.append(EmbeddingResult(
+                        documents=[{k: v for k, v in d.items() if k != "score"} for d in docs[:2]],
+                        scores=[d.get("score", 0.0) for d in docs[:2]],
+                        sources=[d.get("source", "unknown") for d in docs[:2]],
+                    ))
+                timing["semantic_search"] = (datetime.now() - start_time).total_seconds()
+
+        llm_context = LLMContext(
+            metadata=metadata_res,
+            spatial=None,
+            statistics=statistics_res,
+            cde=cde_res,
+            embeddings=embeddings_res,
+            query_summary=self._build_query_summary(QueryPlan(intent="metadata", filters={}, required_tools=["metadata"], response_type="summary"), {
+                "metadata": metadata_res,
+                "statistics": statistics_res,
+                "cde": cde_res,
+                "embeddings": embeddings_res,
+            }),
+            data_quality=self._assess_data_quality({"metadata": metadata_res, "spatial": None}),
+        )
         return llm_context
     
     async def _get_db_session(self):

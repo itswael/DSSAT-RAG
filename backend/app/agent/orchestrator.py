@@ -1,4 +1,8 @@
-"""Orchestrator - main agent coordinator."""
+"""Orchestrator - main agent coordinator.
+
+Flow:
+User → Planner (Structured Outputs) → Executor (parallel tools) → Context → Response Generator
+"""
 import logging
 from typing import Optional
 
@@ -14,6 +18,7 @@ from app.agent.planner import QueryPlanner
 from app.agent.executor import Executor
 from app.agent.context_builder import ContextBuilder
 from app.agent.response_generator import ResponseGenerator
+from app.agent.models import PlannerOutput
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +41,7 @@ class AgentOrchestrator:
             response_api_key: OpenAI API key for response generation (optional)
         """
         self.db_session = db_session
-        self.planner = QueryPlanner(api_key=planner_api_key)
+        self.planner = QueryPlanner(api_key=planner_api_key, db_session=db_session)
         self.executor = Executor(db_session=db_session)
         self.context_builder = ContextBuilder()
         self.response_generator = ResponseGenerator(api_key=response_api_key)
@@ -64,11 +69,12 @@ class AgentOrchestrator:
             plan_start = datetime.now()
             query_plan = await self.planner.plan_with_fallback(user_query)
             timing["planning"] = (datetime.now() - plan_start).total_seconds()
+            planner_output: PlannerOutput | None = self.planner.get_last_planner_output()
             
             # Step 2: Execute tools
             logger.info(f"Step 2: Executing tools - {query_plan.required_tools}")
             exec_start = datetime.now()
-            context = await self.executor.execute(query_plan)
+            context = await self.executor.execute(query_plan, planner_output=planner_output)
             timing["execution"] = (datetime.now() - exec_start).total_seconds()
             
             # Step 3: Generate response

@@ -43,8 +43,9 @@ def map_simulation_to_orm(
         irrigation=canonical.simulation.irrigation or "",
         nitrogen_level=canonical.simulation.nitrogen_level or "",
         planting_stage=canonical.simulation.planting_stage or "",
-        planting_date=None,
-        harvest_date=None,
+        planting_date=canonical.simulation.planting_date,
+        maturity_date=canonical.simulation.maturity_date,
+        harvest_date=canonical.simulation.harvest_date,
         simulation_year=canonical.simulation.year or 2024,
         harvest_area=canonical.simulation.harvest_area,
     )

@@ -24,7 +24,13 @@ class ResponseGenerator:
             api_key: OpenAI API key (optional)
         """
         self.api_key = api_key or settings.OPENAI_API_KEY
-        self.client = AsyncOpenAI(api_key=self.api_key) if self.api_key else None
+        if self.api_key:
+            if settings.OPENAI_BASE_URL:
+                self.client = AsyncOpenAI(api_key=self.api_key, base_url=settings.OPENAI_BASE_URL)
+            else:
+                self.client = AsyncOpenAI(api_key=self.api_key)
+        else:
+            self.client = None
     
     async def generate(
         self,
@@ -44,6 +50,7 @@ class ResponseGenerator:
             Generated response
         """
         logger.info("Generating response")
+        logger.info(f"Response LLM configured: key={'set' if bool(self.api_key) else 'missing'}, model={settings.OPENAI_MODEL}")
 
         # If no LLM, build a simple heuristic answer from context
         if not self.client:
@@ -57,48 +64,44 @@ class ResponseGenerator:
                 limitations=self._identify_limitations(context)
             )
 
-        # Format context for prompt
+        # Format context and get prompt
         context_str = self._format_context(context)
-
-        # Get prompt
         prompt = get_response_prompt(context, user_question)
 
         try:
-            response = await self.client.responses.create(
-                model="gpt-4o",
-                temperature=0.3,
-                max_tokens=2000,
-                system=[{"type": "text", "text": SYSTEM_PROMPT}],
-                input=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-            )
-            
-            # Extract the response text
-            answer = ""
-            for output in response.output:
-                if output.type == "message":
-                    for content in output.content:
-                        if content.type == "text":
-                            answer = content.text
-                            break
-            
-            # Build sources
+            # Prefer Responses API with text output
+            try:
+                resp = await self.client.responses.create(
+                    model=settings.OPENAI_MODEL or "gpt-4o-mini",
+                    input=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.3,
+                )
+                answer = resp.output_text if hasattr(resp, "output_text") else None
+            except Exception:
+                # Fallback to Chat Completions
+                cc = await self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL or "gpt-4o-mini",
+                    temperature=0.3,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                answer = cc.choices[0].message.content or ""
+
             sources = self._build_sources(context)
-            
-            # Determine confidence
             confidence = self._assess_confidence(context, answer)
-            
+
             return ResponseGeneration(
                 answer=answer,
                 sources=sources,
                 confidence=confidence,
                 limitations=self._identify_limitations(context)
             )
-            
+
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
             return ResponseGeneration(

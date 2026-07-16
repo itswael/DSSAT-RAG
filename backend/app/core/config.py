@@ -48,7 +48,9 @@ class Settings(BaseSettings):
         return f"http://{self.QDRANT_HOST}:{self.QDRANT_PORT}"
 
     # OpenAI
-    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = Field(default=None)
+    OPENAI_MODEL: str = Field(default="gpt-oss-120b")
+    OPENAI_BASE_URL: Optional[str] = Field(default=None)
 
     # Application
     APP_NAME: str = Field(default="DSSAT RAG Backend")

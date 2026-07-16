@@ -5,15 +5,25 @@ python-multipart==0.0.6
 
 # Database
 sqlalchemy==2.0.25
-asyncpg==0.29.0
-psycopg[binary]==3.1.18
+psycopg[binary]==3.3.4
 alembic==1.13.1
 geoalchemy2==0.14.6
 
-# Pydantic and validation
-pydantic==2.5.6
+# Pydantic and validation (bumped for Python 3.14 compatibility)
+pydantic==2.13.4
 pydantic-settings==2.2.1
 
 # Utilities
 python-dotenv==1.0.1
 pandas==2.2.2
+pypdf==4.2.0
+
+# OpenAI
+openai==1.35.0
+
+# HTTP client compatibility (OpenAI SDK expects 'proxies' support)
+httpx==0.27.2
+
+# Qdrant
+# qdrant-client pinned to a Python 3.14-compatible version
+qdrant-client==1.18.0

@@ -2,6 +2,7 @@
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from datetime import date
 
 from app.models.canonical import CanonicalSimulation, SimulationModel, LocationModel
 
@@ -83,7 +84,7 @@ class DSSATParser:
             # Try to identify planting stage (ends with numbers or common patterns)
             #cultivar_parts = parts[3:-1] if len(parts) > 4 else [parts[-1]]
             #result["cultivar"] = "_".join(cultivar_parts).strip() or ""
-            result["cultivar"] = parts[3].strip() or ""
+            result["cultivar"] = parts[4].strip() or ""
 
             if len(parts) >= 5:
                 # Last part is usually planting stage
@@ -92,7 +93,8 @@ class DSSATParser:
                 if last_part and (last_part[0].isalpha() or any(c.isdigit() for c in last_part)):
                     result["planting_stage"] = last_part
                 else:
-                    result["cultivar"] = "_".join(parts[3:]).strip()
+                    #result["cultivar"] = "_".join(parts[3:]).strip()
+                    result["cultivar"] = parts[4].strip() or ""
                     result["planting_stage"] = ""
             elif len(parts) == 4:
                 # Only one part left, assume it's cultivar
@@ -195,6 +197,25 @@ class DSSATParser:
         harvest_area = cls.clean_value(get_first(["HARVEST_AREA", "HAREA", "HARVESTAREA"]))
         year = cls.clean_value(get_first(["WYEAR", "YEAR"]))
 
+        # Parse DSSAT day-of-year date fields (PDAT, MDAT, HDAT) in format YYYYDDD -> date
+        def parse_yyyydoy(val: Any) -> Optional[date]:
+            v = cls.clean_value(val)
+            if v is None:
+                return None
+            try:
+                s = str(int(v))
+                if len(s) == 7:
+                    y = int(s[:4])
+                    doy = int(s[4:])
+                    return pd.to_datetime(f"{y}-{doy}", format="%Y-%j").date()
+            except Exception:
+                return None
+            return None
+
+        pdat = parse_yyyydoy(get_first(["PDAT"]))
+        mdat = parse_yyyydoy(get_first(["MDAT"]))
+        hdat = parse_yyyydoy(get_first(["HDAT"]))
+
         if isinstance(year, str):
             try:
                 year = int(year)
@@ -219,6 +240,9 @@ class DSSATParser:
             planting_stage=name_parts.get("planting_stage", ""),
             harvest_area=harvest_area,  # may be None
             year=year if isinstance(year, int) else 2024,
+            planting_date=pdat,
+            maturity_date=mdat,
+            harvest_date=hdat,
         )
 
         location = LocationModel(

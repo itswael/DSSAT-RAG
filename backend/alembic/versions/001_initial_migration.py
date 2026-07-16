@@ -3,6 +3,7 @@ from typing import Any
 
 from alembic import op
 import sqlalchemy as sa
+from geoalchemy2 import Geometry
 
 
 # revision identifiers, used by Alembic.
@@ -33,7 +34,7 @@ def upgrade(name: str = "") -> None:
         sa.Column("longitude", sa.Float(), nullable=False),
         sa.Column(
             "location",
-            sa.Geometry(geometry_type="POINT", srid=4326, from_text="ST_GeomFromEWKT", name="geometry"),
+            Geometry(geometry_type="POINT", srid=4326, from_text="ST_GeomFromEWKT", name="geometry"),
             nullable=False,
         ),
         sa.Column("geohash", sa.String(length=50), nullable=True),
@@ -43,6 +44,7 @@ def upgrade(name: str = "") -> None:
         sa.Column("nitrogen_level", sa.String(length=100), nullable=True),
         sa.Column("planting_stage", sa.String(length=100), nullable=True),
         sa.Column("planting_date", sa.Date(), nullable=True),
+        sa.Column("maturity_date", sa.Date(), nullable=True),
         sa.Column("harvest_date", sa.Date(), nullable=True),
         sa.Column("simulation_year", sa.Integer(), nullable=False),
         sa.Column("harvest_area", sa.Float(), nullable=True),

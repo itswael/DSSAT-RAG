@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.schemas.query import ChatRequest
 from app.agent.orchestrator import AgentOrchestrator
+from app.core.config import get_settings
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ async def chat_query(
         Query result
     """
     try:
-        # Create orchestrator with database session
+        # Create orchestrator with database session (keys resolved internally)
         orchestrator = AgentOrchestrator(db_session=db)
         
         # Execute orchestration
@@ -39,6 +40,8 @@ async def chat_query(
             )
         
         # Return structured response
+        # Include last planner tool calls if available for verification
+        planner_output = orchestrator.planner.get_last_planner_output()
         payload = {
             "answer": response.response.answer if response.response else "",
             "sources": [
@@ -50,9 +53,21 @@ async def chat_query(
                 if response.context and response.context.metadata 
                 else []
             ),
+            "statistics": (
+                response.context.statistics.model_dump()
+                if response.context and response.context.statistics
+                else None
+            ),
             "confidence": response.response.confidence if response.response else "low",
             "query_plan": response.query_plan.model_dump() if response.query_plan else None,
-            "timing": response.timing
+            "timing": response.timing,
+            "planner_tools": (
+                [
+                    {"tool": tc.tool, "parameters": tc.parameters.model_dump() if hasattr(tc.parameters, "model_dump") else tc.parameters}
+                    for tc in planner_output.tools
+                ]
+                if planner_output and planner_output.tools else None
+            )
         }
         return payload
 

@@ -1,5 +1,6 @@
 """Canonical models for all DSSAT data types."""
 from typing import List, Dict, Any, Optional
+from datetime import date
 from pydantic import BaseModel
 
 
@@ -26,6 +27,9 @@ class SimulationModel(BaseModel):
     planting_stage: str = ""
     harvest_area: Optional[float] = None
     year: int = 2024
+    planting_date: Optional[date] = None
+    maturity_date: Optional[date] = None
+    harvest_date: Optional[date] = None
 
 
 class SimulationOutputModel(BaseModel):

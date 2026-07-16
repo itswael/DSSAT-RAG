@@ -63,13 +63,16 @@ class MetadataService:
         # Remove None values
         filters = {k: v for k, v in filters.items() if v is not None}
         
+        logger.info(f"MetadataService.get_simulations filters={filters}")
         simulations = await self.sim_repo.get_with_filters(
             skip=0,
             limit=limit,
             **filters
         )
         
-        return [self._simulation_to_dict(sim) for sim in simulations]
+        records = [self._simulation_to_dict(sim) for sim in simulations]
+        logger.info(f"MetadataService.get_simulations returned {len(records)} records")
+        return records
     
     async def get_simulation_by_id(self, simulation_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -198,6 +201,7 @@ class MetadataService:
             "irrigation": sim.irrigation,
             "nitrogen_level": sim.nitrogen_level,
             "planting_date": str(sim.planting_date) if sim.planting_date else None,
+            "maturity_date": str(sim.maturity_date) if getattr(sim, 'maturity_date', None) else None,
             "harvest_date": str(sim.harvest_date) if sim.harvest_date else None,
             "simulation_year": sim.simulation_year
         }
