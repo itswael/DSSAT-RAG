@@ -5,6 +5,7 @@ from app.agent.executor import Executor
 from app.agent.context_builder import ContextBuilder
 from app.agent.response_generator import ResponseGenerator
 from app.agent.orchestrator import AgentOrchestrator
+from app.agent.tool_registry import ToolRegistry
 
 __all__ = [
     "QueryPlan",
@@ -14,5 +15,5 @@ __all__ = [
     "Executor",
     "ContextBuilder",
     "ResponseGenerator",
-    "AgentOrchestrator"
+    "AgentOrchestrator",
 ]
