@@ -351,7 +351,7 @@ class SimulationRepository:
         self,
         crop: Optional[str] = None,
         cultivar: Optional[str] = None,
-        year: Optional[int] = None,
+        year: Optional[object] = None,
         state: Optional[str] = None,
         district: Optional[str] = None,
         ecological_zone: Optional[str] = None,
@@ -382,7 +382,17 @@ class SimulationRepository:
         if cultivar is not None:
             filters.append(Simulation.cultivar == cultivar)
         if year is not None:
-            filters.append(Simulation.simulation_year == year)
+            try:
+                from collections.abc import Iterable
+                # Treat list-like as IN clause
+                if isinstance(year, Iterable) and not isinstance(year, (str, bytes)):
+                    years = list(year)
+                    if len(years) > 0:
+                        filters.append(Simulation.simulation_year.in_(years))
+                else:
+                    filters.append(Simulation.simulation_year == year)  # type: ignore[arg-type]
+            except Exception:
+                filters.append(Simulation.simulation_year == year)  # fallback
         if state is not None:
             filters.append(Simulation.state == state)
         if district is not None:
