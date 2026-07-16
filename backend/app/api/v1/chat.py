@@ -42,6 +42,7 @@ async def chat_query(
         # Return structured response
         # Include last planner tool calls if available for verification
         planner_output = orchestrator.planner.get_last_planner_output()
+        semantic_plan = orchestrator.planner.get_semantic_plan()
         payload = {
             "answer": response.response.answer if response.response else "",
             "sources": [
@@ -58,8 +59,19 @@ async def chat_query(
                 if response.context and response.context.statistics
                 else None
             ),
+            "additional_statistics": (
+                [s.model_dump() for s in response.context.additional_statistics]
+                if response.context and response.context.additional_statistics
+                else None
+            ),
+            "tool_outputs": (
+                response.context.tool_outputs
+                if response.context and response.context.tool_outputs
+                else None
+            ),
             "confidence": response.response.confidence if response.response else "low",
             "query_plan": response.query_plan.model_dump() if response.query_plan else None,
+            "semantic_plan": semantic_plan.model_dump() if semantic_plan else None,
             "timing": response.timing,
             "planner_tools": (
                 [
