@@ -44,16 +44,11 @@ PLANNER_PROMPT: str = """You are a query planning assistant. Your job is to anal
 
 CRITICAL RULES:
 1. NEVER answer the question directly
-2. ONLY output valid JSON matching the QueryPlan schema
-3. Never write SQL or database queries
-4. Focus on intent, filters, and required tools
+2. Only output a JSON object that matches the requested schema
+3. Never write SQL or expose database details
+4. Only decide which tools to call and the parameters to pass
 
-Available Tools:
-- metadata: Get simulation records and basic information
-- spatial: Location-based filtering (radius, polygon, region)
-- statistics: Aggregate calculations (AVG, MIN, MAX, COUNT, SUM)
-- cde: Variable definitions, relationships, cultivar info
-- embedding: Semantic search for documents and summaries
+You will be provided with the Available Tools and their capabilities below. Use them to construct the plan.
 
 Query Types:
 1. METADATA - "Show simulations for maize" → intent="metadata"
@@ -66,57 +61,88 @@ Query Types:
 
 Output format: Strict JSON only, no markdown, no explanations.
 
+Return JSON schema:
+{
+    "goal": string,
+    "tools": [
+        {
+            "tool": "query_simulation_data" | "query_cde" | "semantic_search",
+            "parameters": object  // parameters must match the tool capabilities provided below
+        }
+    ]
+}
+
 Example 1:
 User: "Average maize yield within 50 km of Gainesville in 2022"
 
 {
-    "intent": "aggregate",
-    "metric": "HWAM",
-    "aggregation": "AVG",
-    "filters": {
-        "crop": "Maize",
-        "year": 2022
-    },
-    "location": {
-        "type": "radius",
-        "latitude": 29.65,
-        "longitude": -82.32,
-        "radius_meters": 50000
-    },
-    "required_tools": ["spatial", "statistics"],
-    "response_type": "summary"
+    "goal": "Compute average maize yield near Gainesville in 2022",
+    "tools": [
+        {
+            "tool": "query_simulation_data",
+            "parameters": {
+                "filters": { "crop": "Maize", "year": 2022 },
+                "metrics": ["HWAM"],
+                "aggregation": "AVG",
+                "group_by": [],
+                "spatial": {
+                    "type": "radius",
+                    "latitude": 29.65,
+                    "longitude": -82.32,
+                    "radius_meters": 50000
+                }
+            }
+        },
+        {
+            "tool": "query_cde",
+            "parameters": { "variables": ["HWAM"] }
+        }
+    ]
 }
 
 Example 2:
 User: "Show all simulations for maize in Florida"
 
 {
-    "intent": "metadata",
-    "filters": {
-        "crop": "Maize",
-        "state": "Florida"
-    },
-    "required_tools": ["metadata", "spatial"],
-    "response_type": "summary"
+    "goal": "List maize simulations in Florida",
+    "tools": [
+        {
+            "tool": "query_simulation_data",
+            "parameters": {
+                "filters": { "crop": "Maize", "state": "Florida" },
+                "metrics": [],
+                "group_by": []
+            }
+        }
+    ]
 }
 
 Example 3:
 User: "Compare HWAM between cultivar A and B in 2021"
 
 {
-    "intent": "comparison",
-    "metric": "HWAM",
-    "filters": {
-        "year": 2021
-    },
-    "comparison": {
-        "cultivar": ["A", "B"]
-    },
-    "required_tools": ["statistics"],
-    "response_type": "comparison"
+    "goal": "Compare HWAM for cultivar A vs B in 2021",
+    "tools": [
+        {
+            "tool": "query_simulation_data",
+            "parameters": {
+                "filters": { "year": 2021 },
+                "metrics": ["HWAM"],
+                "group_by": ["cultivar"]
+            }
+        },
+        {
+            "tool": "query_cde",
+            "parameters": { "variables": ["HWAM"] }
+        }
+    ]
 }
 
-User Query: {user_query}"""
+User Query: {user_query}
+
+Available Tools and capabilities:
+(Provided below — do not invent unsupported metrics or filters)
+"""
 
 
 # =============================================================================
@@ -239,8 +265,14 @@ PROMPT_CONFIG: Dict[str, str] = {
 
 
 def get_planner_prompt(user_query: str) -> str:
-    """Get formatted planner prompt."""
-    return PLANNER_PROMPT.format(user_query=user_query)
+    """Get formatted planner prompt.
+
+    Note: PLANNER_PROMPT contains many JSON examples with braces. Using
+    str.format() would treat those braces as placeholders and raise KeyError
+    for tokens like {cultivar}. We only want to substitute {user_query} and
+    leave all other braces intact, so use a simple replace instead.
+    """
+    return PLANNER_PROMPT.replace("{user_query}", user_query)
 
 
 def get_response_prompt(context: "LLMContext", user_question: str) -> str:
