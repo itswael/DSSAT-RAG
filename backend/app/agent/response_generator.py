@@ -114,10 +114,23 @@ class ResponseGenerator:
     def _heuristic_answer(self, context: "LLMContext", user_question: str) -> str:
         """Produce a simple answer without LLM based on available context."""
         parts = []
+        # Primary statistic
         if context.statistics and context.statistics.value is not None:
             parts.append(
                 f"{context.statistics.aggregation_type.title()} {context.statistics.metric}: {context.statistics.value:.2f}"
             )
+        # Additional stats (e.g., MAX and MIN together)
+        if context.additional_statistics:
+            for s in context.additional_statistics:
+                if s.value is not None:
+                    parts.append(f"{s.aggregation_type.title()} {s.metric}: {s.value:.2f}")
+                if s.breakdown and s.breakdown.get("extremum_location"):
+                    loc = s.breakdown["extremum_location"]
+                    parts.append(
+                        f"Location for {s.aggregation_type.title()}: "
+                        f"({loc.get('latitude')}, {loc.get('longitude')})"
+                        + (f", {loc.get('state') or ''}" if loc.get('state') else "")
+                    )
         if context.metadata and context.metadata.total_count:
             parts.append(f"Found {context.metadata.total_count} matching simulations")
         return ". ".join(parts) if parts else "Query executed successfully"
@@ -144,6 +157,16 @@ class ResponseGenerator:
         if context.statistics and context.statistics.value is not None:
             parts.append(f"\n{context.statistics.aggregation_type.title()} value: "
                         f"{context.statistics.value:.2f} (count: {context.statistics.count})")
+        if context.additional_statistics:
+            for s in context.additional_statistics:
+                if s.value is not None:
+                    parts.append(f"{s.aggregation_type.title()} value: {s.value:.2f} (count: {s.count})")
+                if s.breakdown and s.breakdown.get("extremum_location"):
+                    loc = s.breakdown["extremum_location"]
+                    parts.append(
+                        f"{s.aggregation_type.title()} location: "
+                        f"({loc.get('latitude')}, {loc.get('longitude')})"
+                    )
         
         # CDE
         if context.cde and context.cde.variable_definitions:
@@ -173,6 +196,13 @@ class ResponseGenerator:
                 type="statistics",
                 description=f"Aggregated statistics from {context.statistics.count} records"
             ))
+        if context.additional_statistics:
+            total = sum(s.count for s in context.additional_statistics if s and s.count)
+            if total:
+                sources.append(SourceReference(
+                    type="statistics",
+                    description=f"Additional aggregations from {total} records"
+                ))
         
         if context.cde and context.cde.variable_definitions:
             sources.append(SourceReference(

@@ -13,12 +13,16 @@ from app.agent.models import (
     QueryPlan,
     PlannerOutput,
     PlannerToolCall,
+    SemanticPlan,
+    SemanticOperation,
+    FilterCondition,
     SimulationToolInput,
     CDEToolInput,
     SemanticToolInput,
     MetadataResult,
     SpatialResult,
     StatisticsResult,
+    MultiStatisticsResult,
     CDEResult,
     EmbeddingResult,
     ToolError,
@@ -45,7 +49,7 @@ class Executor:
         """
         self.db_session = db_session
     
-    async def execute(self, query_plan: QueryPlan, planner_output: Optional[PlannerOutput] = None) -> LLMContext:
+    async def execute(self, query_plan: QueryPlan, planner_output: Optional[PlannerOutput] = None, semantic_plan: Optional[SemanticPlan] = None) -> LLMContext:
         """
         Execute tools based on query plan.
         
@@ -67,7 +71,16 @@ class Executor:
         cde_service = CDEService()
         embedding_service = EmbeddingService()
         
-        # If we have a PlannerOutput with explicit tools, use it for dynamic dispatch
+        # Prefer semantic plan → deterministic mapping to tools
+        if semantic_plan and semantic_plan.operations:
+            return await self._execute_from_semantic_plan(
+                db=db,
+                semantic_plan=semantic_plan,
+                timing=timing,
+                errors=errors,
+            )
+
+        # If we only have PlannerOutput with explicit tools, use it for dynamic dispatch
         if planner_output and planner_output.tools:
             return await self._execute_from_planner_output(
                 db=db,
@@ -125,6 +138,152 @@ class Executor:
         
         return llm_context
 
+    async def _execute_from_semantic_plan(
+        self,
+        db,
+        semantic_plan: SemanticPlan,
+        timing: Dict[str, float],
+        errors: List[ToolError],
+    ) -> LLMContext:
+        start_time = datetime.now()
+
+        # Map semantic ops → tool calls
+        from app.agent.tools import SimulationTool, CDETool, SemanticTool
+
+        sim_tool = SimulationTool(db)
+        cde_tool = CDETool()
+        sem_tool = SemanticTool()
+
+        tasks = []
+        names: List[str] = []
+        ops_meta: List[SemanticOperation] = []
+
+        def filters_to_kwargs(filters: List[FilterCondition]) -> Dict[str, Any]:
+            out: Dict[str, Any] = {}
+            # Handle year operators; others as equality for now
+            for f in filters:
+                if f.field == "year":
+                    if f.operator == "=":
+                        out["year"] = f.value
+                    elif f.operator == "IN" and isinstance(f.value, list):
+                        out["year"] = f.value
+                    elif f.operator == "BETWEEN" and isinstance(f.value, list) and len(f.value) == 2:
+                        # Represent BETWEEN as inclusive list for now; future: push down range to SQL
+                        out["year"] = [int(f.value[0]), int(f.value[1])]
+                else:
+                    if f.operator == "=":
+                        out[f.field] = f.value
+                    # Future: add full operator support per field
+            return out
+
+        # Group independent ops to run in parallel
+        for op in semantic_plan.operations:
+            if op.operation == "aggregate":
+                kwargs = filters_to_kwargs(op.filters)
+                params = SimulationToolInput(filters=kwargs, metrics=[op.metric] if op.metric else [], aggregation=op.aggregation, group_by=op.group_by)
+                tasks.append(sim_tool.run(params))
+                names.append("simulation")
+                ops_meta.append(op)
+            elif op.operation == "definition":
+                params = CDEToolInput(variables=[op.variable] if op.variable else [])
+                tasks.append(cde_tool.run(params))
+                names.append("cde")
+                ops_meta.append(op)
+            elif op.operation == "semantic_search":
+                params = SemanticToolInput(query=op.query or "", top_k=5)
+                tasks.append(sem_tool.run(params))
+                names.append("semantic")
+                ops_meta.append(op)
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Build context similarly to planner_output path (reuse code where practical)
+        metadata_res: Optional[MetadataResult] = None
+        statistics_res: Optional[StatisticsResult] = None
+        multi_stats: List[StatisticsResult] = []
+        cde_res: Optional[CDEResult] = None
+        embeddings_res: List[EmbeddingResult] = []
+        tool_outputs: List[Dict[str, Any]] = []
+
+        for i, result in enumerate(results):
+            name = names[i]
+            op = ops_meta[i]
+            if isinstance(result, Exception):
+                errors.append(ToolError(tool_name=name, error_type=type(result).__name__, message=str(result)))
+                logger.error(f"Tool {name} failed: {result}")
+                continue
+            if name == "simulation":
+                sims = result.simulations or []
+                metadata_res = MetadataResult(
+                    simulations=sims,
+                    total_count=len(sims),
+                    crops=list({s.get("crop") for s in sims if s.get("crop")}),
+                    cultivars=list({s.get("cultivar") for s in sims if s.get("cultivar")}),
+                )
+                if result.statistics and result.statistics.metric:
+                    stat = StatisticsResult(
+                        aggregation_type=result.statistics.aggregation_type or "",
+                        metric=result.statistics.metric or "",
+                        value=result.statistics.value,
+                        count=result.statistics.count,
+                        breakdown=result.statistics.breakdown,
+                        unit=result.statistics.unit,
+                    )
+                    multi_stats.append(stat)
+                    statistics_res = stat
+                tool_outputs.append({
+                    "operation": op.model_dump(),
+                    "tool": "query_simulation_data",
+                    "output": {"simulations": len(sims), "statistics": (stat.model_dump() if 'stat' in locals() and stat else None)}
+                })
+            elif name == "cde":
+                var_defs = []
+                for code, d in (result.definitions or {}).items():
+                    d = dict(d)
+                    d.setdefault("code", code)
+                    var_defs.append(d)
+                rels = []
+                for code, rel in (result.relationships or {}).items():
+                    rels.append({"variable": code, "related": rel})
+                cde_res = CDEResult(variable_definitions=var_defs, relationships=rels)
+                tool_outputs.append({
+                    "operation": op.model_dump(),
+                    "tool": "query_cde",
+                    "output": {"variable_count": len(var_defs), "relationship_count": len(rels)}
+                })
+            elif name == "semantic":
+                docs = result.documents or []
+                if docs:
+                    embeddings_res.append(EmbeddingResult(
+                        documents=[{k: v for k, v in d.items() if k != "score"} for d in docs[:2]],
+                        scores=[d.get("score", 0.0) for d in docs[:2]],
+                        sources=[d.get("source", "unknown") for d in docs[:2]],
+                    ))
+                tool_outputs.append({
+                    "operation": op.model_dump(),
+                    "tool": "semantic_search",
+                    "output": {"documents": len(docs)}
+                })
+
+        llm_context = LLMContext(
+            metadata=metadata_res,
+            spatial=None,
+            statistics=statistics_res,
+            additional_statistics=multi_stats if len(multi_stats) > 1 else None,
+            cde=cde_res,
+            embeddings=embeddings_res,
+            tool_outputs=tool_outputs or None,
+            query_summary=self._build_query_summary(QueryPlan(intent="metadata", filters={}, required_tools=["metadata"], response_type="summary"), {
+                "metadata": metadata_res,
+                "statistics": statistics_res,
+                "cde": cde_res,
+                "embeddings": embeddings_res,
+            }),
+            data_quality=self._assess_data_quality({"metadata": metadata_res, "spatial": None}),
+        )
+        timing["semantic_execute"] = (datetime.now() - start_time).total_seconds()
+        return llm_context
+
     async def _execute_from_planner_output(
         self,
         db,
@@ -143,28 +302,35 @@ class Executor:
 
         tasks = []
         names: List[str] = []
+        calls_meta: List[PlannerToolCall] = []
 
         for call in planner_output.tools:
             if call.tool == "query_simulation_data":
                 tasks.append(sim_tool.run(call.parameters))
                 names.append("simulation")
+                calls_meta.append(call)
             elif call.tool == "query_cde":
                 tasks.append(cde_tool.run(call.parameters))
                 names.append("cde")
+                calls_meta.append(call)
             elif call.tool == "semantic_search":
                 tasks.append(sem_tool.run(call.parameters))
                 names.append("semantic")
+                calls_meta.append(call)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Map tool outputs to context models
         metadata_res: Optional[MetadataResult] = None
         statistics_res: Optional[StatisticsResult] = None
+        multi_stats: List[StatisticsResult] = []
         cde_res: Optional[CDEResult] = None
         embeddings_res: List[EmbeddingResult] = []
 
+        tool_outputs: List[Dict[str, Any]] = []
         for i, result in enumerate(results):
             name = names[i]
+            call = calls_meta[i]
             if isinstance(result, Exception):
                 errors.append(ToolError(tool_name=name, error_type=type(result).__name__, message=str(result)))
                 logger.error(f"Tool {name} failed: {result}")
@@ -180,7 +346,7 @@ class Executor:
                 )
                 # Build StatisticsResult if present
                 if result.statistics and result.statistics.metric:
-                    statistics_res = StatisticsResult(
+                    stat = StatisticsResult(
                         aggregation_type=result.statistics.aggregation_type or "",
                         metric=result.statistics.metric or "",
                         value=result.statistics.value,
@@ -188,6 +354,19 @@ class Executor:
                         breakdown=result.statistics.breakdown,
                         unit=result.statistics.unit,
                     )
+                    # If multiple simulation tool calls are present (e.g., MAX and MIN), collect them
+                    multi_stats.append(stat)
+                    statistics_res = stat
+                # Collect tool-tagged output with parameters
+                params = call.parameters.model_dump() if hasattr(call.parameters, "model_dump") else {}
+                tool_outputs.append({
+                    "tool": call.tool,
+                    "parameters": params,
+                    "output": {
+                        "simulations": len(sims),
+                        "statistics": (stat.model_dump() if 'stat' in locals() and stat else None)
+                    }
+                })
                 timing["query_simulation_data"] = (datetime.now() - start_time).total_seconds()
             elif name == "cde":
                 var_defs = []
@@ -199,6 +378,13 @@ class Executor:
                 for code, rel in (result.relationships or {}).items():
                     rels.append({"variable": code, "related": rel})
                 cde_res = CDEResult(variable_definitions=var_defs, relationships=rels)
+                # tool-tagged output
+                params = call.parameters.model_dump() if hasattr(call.parameters, "model_dump") else {}
+                tool_outputs.append({
+                    "tool": call.tool,
+                    "parameters": params,
+                    "output": {"variable_count": len(var_defs), "relationship_count": len(rels)}
+                })
                 timing["query_cde"] = (datetime.now() - start_time).total_seconds()
             elif name == "semantic":
                 docs = result.documents or []
@@ -208,14 +394,23 @@ class Executor:
                         scores=[d.get("score", 0.0) for d in docs[:2]],
                         sources=[d.get("source", "unknown") for d in docs[:2]],
                     ))
+                params = call.parameters.model_dump() if hasattr(call.parameters, "model_dump") else {}
+                tool_outputs.append({
+                    "tool": call.tool,
+                    "parameters": params,
+                    "output": {"documents": len(docs)}
+                })
                 timing["semantic_search"] = (datetime.now() - start_time).total_seconds()
 
+        # If multiple stats were computed, include all; keep first in statistics for backward compatibility.
         llm_context = LLMContext(
             metadata=metadata_res,
             spatial=None,
             statistics=statistics_res,
+            additional_statistics=multi_stats if len(multi_stats) > 1 else None,
             cde=cde_res,
             embeddings=embeddings_res,
+            tool_outputs=tool_outputs or None,
             query_summary=self._build_query_summary(QueryPlan(intent="metadata", filters={}, required_tools=["metadata"], response_type="summary"), {
                 "metadata": metadata_res,
                 "statistics": statistics_res,
@@ -355,12 +550,19 @@ class Executor:
             
             filters = query_plan.filters.copy()
             
+            # Support comma-separated year ranges like "2015,2016" → [2015, 2016]
+            year = filters.get("year")
+            if isinstance(year, str) and "," in year:
+                try:
+                    year = [int(y.strip()) for y in year.split(",") if y.strip()]
+                except Exception:
+                    pass
             result = await service.calculate_aggregation(
                 variable_code=query_plan.metric,
                 aggregation=query_plan.aggregation,
                 crop=filters.get("crop"),
                 cultivar=filters.get("cultivar"),
-                year=filters.get("year")
+                year=year
             )
             
             timing["statistics"] = (datetime.now() - start).total_seconds()

@@ -89,6 +89,35 @@ class StatisticsService:
         if len(candidates) == 1:
             return candidates[0]
         return None
+
+    async def resolve_crop_code(self, crop_text: str) -> Optional[str]:
+        """Resolve a crop code from a user-provided crop text.
+
+        Attempts exact/ci match against DB crop codes, then falls back to a small
+        synonym map for common names (kept minimal; DB-first).
+        """
+        if not crop_text:
+            return None
+        crops = await self.get_available_crops()
+        # exact case-insensitive match
+        for c in crops:
+            if c.lower() == crop_text.lower():
+                return c
+        # synonyms map (expand as needed)
+        synonyms = {
+            "maize": "MZ",
+            "corn": "MZ",
+        }
+        key = crop_text.strip().lower()
+        if key in synonyms and synonyms[key] in crops:
+            return synonyms[key]
+        # fallback: if crop_text starts with any code when letters removed
+        norm = lambda s: ''.join(ch for ch in s.lower() if ch.isalpha())
+        ntext = norm(crop_text)
+        for c in crops:
+            if norm(c) == ntext or c.lower() in ntext or ntext in c.lower():
+                return c
+        return None
     
     async def calculate_aggregation(
         self,
@@ -96,7 +125,7 @@ class StatisticsService:
         aggregation: str,
         crop: Optional[str] = None,
         cultivar: Optional[str] = None,
-        year: Optional[int] = None,
+        year: Optional[object] = None,
         state: Optional[str] = None,
         district: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -122,7 +151,16 @@ class StatisticsService:
         if cultivar is not None:
             sim_filters.append(Simulation.cultivar == cultivar)
         if year is not None:
-            sim_filters.append(Simulation.simulation_year == year)
+            try:
+                from collections.abc import Iterable
+                if isinstance(year, Iterable) and not isinstance(year, (str, bytes)):
+                    years = list(year)
+                    if len(years) > 0:
+                        sim_filters.append(Simulation.simulation_year.in_(years))
+                else:
+                    sim_filters.append(Simulation.simulation_year == year)  # type: ignore[arg-type]
+            except Exception:
+                sim_filters.append(Simulation.simulation_year == year)
         if state is not None:
             sim_filters.append(Simulation.state == state)
         if district is not None:
@@ -161,6 +199,70 @@ class StatisticsService:
             "value": row.value if row else None,
             "count": row.count if row else 0,
             "unit": None,
+        }
+
+    async def get_extremum_simulation(
+        self,
+        variable_code: str,
+        aggregation: str,
+        crop: Optional[str] = None,
+        cultivar: Optional[str] = None,
+        year: Optional[object] = None,
+        state: Optional[str] = None,
+        district: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch the simulation record (and value) corresponding to MIN or MAX.
+
+        Returns a dict with simulation and value fields, or None if not found.
+        """
+        order_desc = aggregation.upper() == "MAX"
+
+        # Build filters
+        sim_filters = []
+        if crop is not None:
+            sim_filters.append(Simulation.crop == crop)
+        if cultivar is not None:
+            sim_filters.append(Simulation.cultivar == cultivar)
+        if year is not None:
+            try:
+                from collections.abc import Iterable
+                if isinstance(year, Iterable) and not isinstance(year, (str, bytes)):
+                    years = list(year)
+                    if len(years) > 0:
+                        sim_filters.append(Simulation.simulation_year.in_(years))
+                else:
+                    sim_filters.append(Simulation.simulation_year == year)  # type: ignore[arg-type]
+            except Exception:
+                sim_filters.append(Simulation.simulation_year == year)
+        if state is not None:
+            sim_filters.append(Simulation.state == state)
+        if district is not None:
+            sim_filters.append(Simulation.district == district)
+
+        stmt = (
+            select(Simulation, SimulationOutput.value.label("value"))
+            .join(Simulation, SimulationOutput.simulation_id == Simulation.simulation_id)
+            .where(SimulationOutput.variable_code == variable_code)
+        )
+        if sim_filters:
+            stmt = stmt.where(*sim_filters)
+        stmt = stmt.order_by(sql_func.desc(SimulationOutput.value) if order_desc else sql_func.asc(SimulationOutput.value)).limit(1)
+
+        res = await self.db.execute(stmt)
+        row = res.fetchone()
+        if not row:
+            return None
+        sim: Simulation = row.Simulation if hasattr(row, "Simulation") else row[0]
+        val = row.value if hasattr(row, "value") else row[1]
+        return {
+            "simulation_id": str(sim.simulation_id),
+            "value": val,
+            "latitude": sim.latitude,
+            "longitude": sim.longitude,
+            "country": sim.country,
+            "state": sim.state,
+            "district": sim.district,
+            "year": sim.simulation_year,
         }
     
     async def calculate_breakdown(

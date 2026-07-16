@@ -15,13 +15,19 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
 
-    # Configure logging level
-    log_level = logging.INFO if settings.DEBUG else logging.WARNING
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
-    # Ensure agent module logs are visible at INFO in non-debug
-    logging.getLogger("app").setLevel(log_level)
-    logging.getLogger("app.agent").setLevel(log_level)
-    logging.getLogger("app.agent.planner").setLevel(log_level)
+    # Configure logging
+    base_level = logging.INFO if settings.DEBUG else logging.WARNING
+    logging.basicConfig(level=base_level, format="%(levelname)s: %(message)s")
+    # Force INFO for our modules so planner/executor/service logs are visible
+    for name in [
+        "app",
+        "app.agent",
+        "app.agent.planner",
+        "app.agent.executor",
+        "app.services.metadata_service",
+        "app.services.statistics_service",
+    ]:
+        logging.getLogger(name).setLevel(logging.INFO)
 
     app = FastAPI(
         title=settings.APP_NAME,

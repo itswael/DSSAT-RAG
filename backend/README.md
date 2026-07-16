@@ -55,6 +55,15 @@ cp .env.example .env
 # Edit .env with your configuration
 ```
 
+Add at minimum for LLM access (used by planner and response generator):
+
+```
+OPENAI_API_KEY=YOUR_OPENAI_KEY
+OPENAI_MODEL=gpt-4o-mini
+# Optional: use a custom base URL (e.g., UF endpoint)
+# OPENAI_BASE_URL=https://api.ai.it.ufl.edu/v1
+```
+
 3. Run database migrations:
 ```bash
 alembic upgrade head

@@ -18,7 +18,7 @@ from app.agent.planner import QueryPlanner
 from app.agent.executor import Executor
 from app.agent.context_builder import ContextBuilder
 from app.agent.response_generator import ResponseGenerator
-from app.agent.models import PlannerOutput
+from app.agent.models import PlannerOutput, SemanticPlan
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,12 @@ class AgentOrchestrator:
             query_plan = await self.planner.plan_with_fallback(user_query)
             timing["planning"] = (datetime.now() - plan_start).total_seconds()
             planner_output: PlannerOutput | None = self.planner.get_last_planner_output()
+            semantic_plan: SemanticPlan | None = self.planner.get_semantic_plan()
             
             # Step 2: Execute tools
             logger.info(f"Step 2: Executing tools - {query_plan.required_tools}")
             exec_start = datetime.now()
-            context = await self.executor.execute(query_plan, planner_output=planner_output)
+            context = await self.executor.execute(query_plan, planner_output=planner_output, semantic_plan=semantic_plan)
             timing["execution"] = (datetime.now() - exec_start).total_seconds()
             
             # Step 3: Generate response
@@ -153,12 +154,16 @@ class AgentOrchestrator:
                     response_type="summary"
                 )
             timing["planning"] = (datetime.now() - plan_start).total_seconds()
+            planner_output: PlannerOutput | None = self.planner.get_last_planner_output()
             
             # Step 2: Execute
             logger.info("Step 2: Executing")
             exec_start = datetime.now()
             try:
-                context = await self.executor.execute(query_plan)
+                # Use semantic plan or dynamic PlannerOutput when available
+                planner_output: PlannerOutput | None = self.planner.get_last_planner_output()
+                semantic_plan: SemanticPlan | None = self.planner.get_semantic_plan()
+                context = await self.executor.execute(query_plan, planner_output=planner_output, semantic_plan=semantic_plan)
             except Exception as e:
                 logger.error(f"Execution failed: {e}")
                 errors.append({

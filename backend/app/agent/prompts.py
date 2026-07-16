@@ -40,7 +40,7 @@ Response format:
 # PLANNER PROMPT
 # =============================================================================
 
-PLANNER_PROMPT: str = """You are a query planning assistant. Your job is to analyze natural language queries and generate precise execution plans.
+PLANNER_PROMPT: str = """You are a semantic planning assistant. Your job is to analyze natural language queries and generate a production-grade semantic plan.
 
 CRITICAL RULES:
 1. NEVER answer the question directly
@@ -49,6 +49,9 @@ CRITICAL RULES:
 4. Only decide which tools to call and the parameters to pass
 
 You will be provided with the Available Tools and their capabilities below. Use them to construct the plan.
+
+Special cases:
+- If the user asks for multiple aggregations (e.g., "max and min") or multiple years (e.g., "2015 and 2016"), emit multiple "query_simulation_data" tool calls with the SAME filters/metrics but different "aggregation" values (e.g., one with "MAX" and one with "MIN") similarly for the years.
 
 Query Types:
 1. METADATA - "Show simulations for maize" → intent="metadata"
@@ -59,17 +62,28 @@ Query Types:
 6. EXPLANATION - "Why was yield low?" → intent="explanation"
 7. HYBRID - Combine multiple intents
 
-Output format: Strict JSON only, no markdown, no explanations.
+IMPORTANT: Do NOT select tools. Do NOT reference databases or SQL.
+Return a semantic plan only.
 
-Return JSON schema:
+Output format (strict JSON only):
 {
     "goal": string,
-    "tools": [
+    "intent": "aggregate|compare|trend|definition|explanation|metadata|hybrid",
+    "operations": [
         {
-            "tool": "query_simulation_data" | "query_cde" | "semantic_search",
-            "parameters": object  // parameters must match the tool capabilities provided below
+            "operation": "aggregate|definition|semantic_search|metadata|trend|explanation|spatial",
+            "metric": string (optional),
+            "aggregation": "AVG|MIN|MAX|COUNT|SUM" (optional),
+            "filters": [ { "field": string, "operator": "=|!=|>|>=|<|<=|BETWEEN|IN|LIKE|CONTAINS", "value": any } ],
+            "group_by": [ string ],
+            "independent": boolean,
+            "variable": string (for definition),
+            "query": string (for semantic_search)
         }
-    ]
+    ],
+    "comparison_axis": string (optional),
+    "comparison_mode": "independent|combined" (optional),
+    "comparison_values": [ any ] (optional)
 }
 
 Example 1:
@@ -136,6 +150,49 @@ User: "Compare HWAM between cultivar A and B in 2021"
             "parameters": { "variables": ["HWAM"] }
         }
     ]
+}
+
+Example: Compare max HWAM in 2015 and 2016
+
+{
+  "goal": "Compare maximum HWAM",
+  "intent": "compare",
+  "comparison_axis": "year",
+  "comparison_mode": "independent",
+  "comparison_values": [2015, 2016],
+  "operations": [
+    {
+      "operation": "aggregate",
+      "metric": "HWAM",
+      "aggregation": "MAX",
+      "independent": true,
+      "filters": [{ "field": "year", "operator": "=", "value": 2015 }]
+    },
+    {
+      "operation": "aggregate",
+      "metric": "HWAM",
+      "aggregation": "MAX",
+      "independent": true,
+      "filters": [{ "field": "year", "operator": "=", "value": 2016 }]
+    }
+  ]
+}
+
+Example: Maximum HWAM from 2015 to 2016
+
+{
+  "goal": "Maximum HWAM across 2015–2016",
+  "intent": "aggregate",
+  "comparison_mode": "combined",
+  "operations": [
+    {
+      "operation": "aggregate",
+      "metric": "HWAM",
+      "aggregation": "MAX",
+      "independent": false,
+      "filters": [{ "field": "year", "operator": "BETWEEN", "value": [2015, 2016] }]
+    }
+  ]
 }
 
 User Query: {user_query}
@@ -277,9 +334,41 @@ def get_planner_prompt(user_query: str) -> str:
 
 def get_response_prompt(context: "LLMContext", user_question: str) -> str:
     """Get formatted response generator prompt."""
+    additional_stats = (
+        "\n".join(
+            [
+                f"- {s.aggregation_type} {s.metric}: value={s.value} count={s.count}" for s in (context.additional_statistics or [])
+                if s and s.value is not None
+            ]
+        ) if context.additional_statistics else "None"
+    )
+    def _format_tool_output(t: dict) -> str:
+        op = t.get("operation") or {}
+        params = t.get("parameters") or {}
+        # Prefer semantic op if present; fallback to parameters for legacy path
+        metric = op.get("metric") or params.get("metrics")
+        aggregation = op.get("aggregation") or params.get("aggregation")
+        filters = op.get("filters") or (params.get("filters") if isinstance(params, dict) else None)
+        filt_str = ""
+        if filters:
+            try:
+                # filters may be list of {field,operator,value} or dict
+                if isinstance(filters, list):
+                    parts = [f"{f.get('field')} {f.get('operator','=')} {f.get('value')}" for f in filters]
+                elif isinstance(filters, dict):
+                    parts = [f"{k}={v}" for k, v in filters.items()]
+                else:
+                    parts = [str(filters)]
+                filt_str = "; filters: " + ", ".join(parts)
+            except Exception:
+                filt_str = "; filters: " + str(filters)
+        return f"- {t.get('tool')}: metric={metric} agg={aggregation}{filt_str}; output={t.get('output')}"
+    tool_outputs = ("\n".join([_format_tool_output(t) for t in (context.tool_outputs or [])]) if context.tool_outputs else "None")
     context_str = f"""
 Metadata: {context.metadata.model_dump() if context.metadata else "None"}
 Statistics: {context.statistics.model_dump() if context.statistics else "None"}
+Additional Statistics:\n{additional_stats}
+Tool Outputs:\n{tool_outputs}
 Spatial: {context.spatial.model_dump() if context.spatial else "None"}
 CDE: {context.cde.model_dump() if context.cde else "None"}
 Embeddings: {len(context.embeddings) if context.embeddings else 0} documents found
